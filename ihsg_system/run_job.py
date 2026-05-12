@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("JobRunner")
 
-VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket"]
+VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket", "sentiment", "fundamental_weekly", "supervisor"]
 
 
 def main() -> None:
@@ -45,14 +45,18 @@ def main() -> None:
     from scheduler import (
         run_macro, run_premarket,
         run_full_scan, run_quick_scan, run_aftermarket,
+        run_sentiment_scan, run_fundamental_weekly, run_supervisor_closing,
     )
 
     job_map = {
-        "macro":       run_macro,
-        "premarket":   run_premarket,
-        "full_scan":   run_full_scan,
-        "quick_scan":  run_quick_scan,
-        "aftermarket": run_aftermarket,
+        "macro":               run_macro,
+        "premarket":           run_premarket,
+        "full_scan":           run_full_scan,
+        "quick_scan":          run_quick_scan,
+        "aftermarket":         run_aftermarket,
+        "sentiment":           run_sentiment_scan,
+        "fundamental_weekly":  run_fundamental_weekly,
+        "supervisor":          run_supervisor_closing,
     }
 
     logger.info(f"Menjalankan job: {args.job}")

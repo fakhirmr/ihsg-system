@@ -1,0 +1,28 @@
+name: "Fundamental — Weekly (Monday 07:30 WIB)"
+
+on:
+  schedule:
+    # Senin 07:30 WIB = 00:30 UTC
+    - cron: "30 0 * * 1"
+  workflow_dispatch:
+
+jobs:
+  fundamental-weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120   # 58 saham dengan LLM butuh waktu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r ihsg_system/requirements.txt
+      - name: Run Fundamental Weekly Scan
+        working-directory: ihsg_system
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_PROVIDER: auto
+        run: python run_job.py --job fundamental_weekly

@@ -1,22 +1,24 @@
 """
-IHSG Trading System -- Automated Scheduler
+IHSG Trading System -- Master Scheduler v2
 ==========================================
-Menjalankan setiap agent secara otomatis sesuai jadwal WIB
-dan mengirim laporan ke Telegram.
+Jadwal otomatis setiap agent:
 
-Jadwal:
-  08:00  -- Macro Agent       : Analisis kondisi makro pagi
-  08:30  -- Pre-Market Report : Briefing + watchlist
-  09:15  -- Morning Scan      : Scan semua ticker (semua agent)
-  12:00  -- Midday Scan       : Technical + Volume (cepat)
-  14:30  -- Afternoon Scan    : Technical + Volume
-  15:50  -- Closing Scan      : Scan akhir sebelum close
-  16:30  -- After-Market      : Laporan penutupan + evaluasi
-  (Setiap 4 jam)  -- Macro refresh
+  Technical + Volume : setiap 15 menit (jam market 09:00-16:00 WIB)
+  News Sentiment     : setiap 1 jam (jam market)
+  Macro              : 1x sehari (08:00 WIB)
+  Fundamental        : 1x seminggu (Senin 07:30 WIB)
+                       + dipicu otomatis jika Sentiment mendeteksi
+                         berita signifikan terhadap saham tertentu
+  Supervisor         : saat closing market (15:50 WIB)
+
+Hubungan Sentiment <-> Fundamental:
+  - Setiap hasil Sentiment dicek apakah trigger_fundamental_review = True
+  - Jika ya, Fundamental Agent dijalankan untuk saham tsb + affected_tickers
+  - Fundamental juga menyertakan konteks sentimen terkini saat analisis mingguan
 
 Usage:
-    python scheduler.py              # Jalankan scheduler (mode daemon)
-    python scheduler.py --send-schedule  # Hanya kirim kartu jadwal ke Telegram
+    python scheduler.py              # Jalankan scheduler penuh
+    python scheduler.py --send-schedule  # Kirim kartu jadwal ke Telegram
 """
 from __future__ import annotations
 
@@ -24,18 +26,14 @@ import argparse
 import io
 import logging
 import sys
-import time
 import threading
+import time
 from datetime import datetime, timedelta
+from typing import Any
 
-# Force UTF-8 on Windows
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-from config import DEFAULT_TICKERS, MIN_CONFIDENCE_ALERT
-from utils.logger import log
-from utils.telegram_sender import send_alert_chunked, send_message
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,413 +42,565 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Scheduler")
 
-# ── Jadwal definisi ────────────────────────────────────────────────────────────
+from config import DEFAULT_TICKERS, MIN_CONFIDENCE_ALERT
+from utils.telegram_sender import send_alert_chunked, send_message
+from utils.agent_cache import get as cache_get, set as cache_set
 
-SCHEDULE: list[dict] = [
-    {
-        "time": "08:00",
-        "name": "Macro Morning",
-        "agent": "MacroAgent",
-        "emoji": "🌐",
-        "desc": "Analisis kondisi makro & ekonomi global",
-        "func": "run_macro",
-    },
-    {
-        "time": "08:30",
-        "name": "Pre-Market Report",
-        "agent": "MacroAgent + Supervisor",
-        "emoji": "🌅",
-        "desc": "Briefing pre-market + watchlist rekomendasi",
-        "func": "run_premarket",
-    },
-    {
-        "time": "09:15",
-        "name": "Morning Scan",
-        "agent": "All Agents (5 agent)",
-        "emoji": "📊",
-        "desc": "Scan lengkap semua ticker (Technical, Fundamental, Volume, Macro, Sentiment)",
-        "func": "run_full_scan",
-    },
-    {
-        "time": "12:00",
-        "name": "Midday Scan",
-        "agent": "Technical + Volume",
-        "emoji": "🔍",
-        "desc": "Scan cepat intraday — cari breakout & volume spike",
-        "func": "run_quick_scan",
-    },
-    {
-        "time": "14:30",
-        "name": "Afternoon Scan",
-        "agent": "Technical + Volume",
-        "emoji": "📈",
-        "desc": "Scan sore — konfirmasi tren & peluang entry",
-        "func": "run_quick_scan",
-    },
-    {
-        "time": "15:50",
-        "name": "Closing Scan",
-        "agent": "All Agents (5 agent)",
-        "emoji": "🔔",
-        "desc": "Scan akhir sebelum penutupan — sinyal untuk besok",
-        "func": "run_full_scan",
-    },
-    {
-        "time": "16:30",
-        "name": "After-Market Report",
-        "agent": "Supervisor + Learning Agent",
-        "emoji": "🌆",
-        "desc": "Rekap penutupan, top gainer/loser, evaluasi sinyal & outlook besok",
-        "func": "run_aftermarket",
-    },
-]
+# ── Konstanta Jadwal ───────────────────────────────────────────────────────────
+MARKET_OPEN  = (9, 0)    # 09:00 WIB
+MARKET_CLOSE = (16, 0)   # 16:00 WIB
+TECHNICAL_INTERVAL_MIN  = 15   # menit
+SENTIMENT_INTERVAL_MIN  = 60   # menit
+MACRO_TIME              = "08:00"
+FUNDAMENTAL_WEEKDAY     = 0    # Senin (0=Mon ... 6=Sun)
+FUNDAMENTAL_TIME        = "07:30"
+SUPERVISOR_TIME         = "15:50"
 
-# Macro refresh setiap 4 jam (di luar jadwal di atas)
-MACRO_REFRESH_HOURS = 4
+# TTL cache fundamental per ticker (7 hari)
+TTL_FUNDAMENTAL_WEEKLY = 7 * 24 * 3600
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-# ── Format kartu jadwal ────────────────────────────────────────────────────────
+def _now() -> datetime:
+    return datetime.now()
 
-def _format_schedule_card() -> str:
-    now = datetime.now()
-    date_str = now.strftime("%A, %d %B %Y")
-    wib_now = now.strftime("%H:%M")
+def _is_weekday() -> bool:
+    return _now().weekday() < 5
 
-    lines = [
-        "<b>IHSG Trading System</b>",
-        "<b>Jadwal Notifikasi Otomatis</b>",
-        f"<i>{date_str} | WIB</i>",
-        "",
-        "=" * 35,
-    ]
-
-    for job in SCHEDULE:
-        job_time = job["time"]
-        # Tandai job yang sudah lewat hari ini
-        try:
-            job_dt = datetime.strptime(job_time, "%H:%M").replace(
-                year=now.year, month=now.month, day=now.day
-            )
-            status = "✅" if job_dt < now else "⏰"
-        except Exception:
-            status = "⏰"
-
-        lines += [
-            f"{status} <b>{job['emoji']} {job_time} — {job['name']}</b>",
-            f"   Agent   : {job['agent']}",
-            f"   Laporan : {job['desc']}",
-            "",
-        ]
-
-    lines += [
-        "=" * 35,
-        "",
-        f"<b>Macro Refresh</b> setiap {MACRO_REFRESH_HOURS} jam sekali",
-        "<b>Alert otomatis</b> jika confidence >= 65%",
-        f"<b>Watchlist</b> : {len(DEFAULT_TICKERS)} saham",
-        "",
-        f"<i>Scheduler aktif sejak {wib_now} WIB</i>",
-    ]
-
-    return "\n".join(lines)
-
-
-def send_schedule_card() -> None:
-    """Kirim kartu jadwal ke Telegram."""
-    msg = _format_schedule_card()
-    ok = send_alert_chunked(msg)
-    if ok:
-        logger.info("Kartu jadwal berhasil dikirim ke Telegram.")
-        print("\nKartu jadwal berhasil dikirim ke Telegram!")
-    else:
-        logger.error("Gagal mengirim kartu jadwal ke Telegram.")
-        print("\nGagal mengirim kartu jadwal ke Telegram.")
-    print(_format_schedule_card().replace("<b>", "").replace("</b>", "")
-          .replace("<i>", "").replace("</i>", ""))
-
-
-# ── Runner functions ───────────────────────────────────────────────────────────
+def _is_market_hours() -> bool:
+    n = _now()
+    oh, om = MARKET_OPEN
+    ch, cm = MARKET_CLOSE
+    market_open  = n.replace(hour=oh, minute=om, second=0, microsecond=0)
+    market_close = n.replace(hour=ch, minute=cm, second=0, microsecond=0)
+    return market_open <= n <= market_close
 
 def _notify(emoji: str, title: str, body: str = "") -> None:
-    """Kirim notifikasi singkat ke Telegram."""
     msg = f"{emoji} <b>{title}</b>"
     if body:
         msg += f"\n{body}"
     send_message(msg)
 
+def _run_thread(fn, name: str = "") -> None:
+    t = threading.Thread(target=fn, name=name or fn.__name__, daemon=True)
+    t.start()
+
+def _hhmm_to_today(hhmm: str) -> datetime:
+    h, m = map(int, hhmm.split(":"))
+    return _now().replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+# ── 1. TECHNICAL + VOLUME — setiap 15 menit ───────────────────────────────────
+
+def run_technical_volume() -> None:
+    """Fast technical screener (tanpa LLM). Alert jika ada sinyal kuat."""
+    if not _is_market_hours():
+        return
+
+    from utils.data_fetcher import fetch_stock_data
+    from utils.technical_calculator import calculate_technical_data
+
+    ts = _now().strftime("%H:%M WIB")
+    logger.info(f"[Technical+Volume] Scan dimulai — {ts}")
+
+    buy_alerts, sell_alerts = [], []
+
+    for ticker in DEFAULT_TICKERS:
+        try:
+            sd = fetch_stock_data(ticker)
+            if not sd.is_valid:
+                continue
+            td = calculate_technical_data(ticker, sd.price_history)
+            p  = sd.current_price
+
+            score = 0
+            if td.trend == "UPTREND":       score += 20
+            elif td.trend == "DOWNTREND":   score -= 20
+            if td.is_above_ema20:           score += 10
+            else:                           score -= 10
+            if td.is_above_ema50:           score += 8
+            else:                           score -= 8
+            if td.macd_histogram > 0:       score += 8
+            else:                           score -= 5
+            if td.is_breakout:              score += 15
+            if td.is_breakdown:             score -= 15
+            if td.higher_high:              score += 8
+            if td.lower_low:               score -= 8
+            if 40 <= td.rsi_14 <= 65:      score += 5
+            elif td.rsi_14 > 70:           score -= 10
+            if sd.relative_volume >= 2.0:  score += 10
+
+            entry = p
+            tp1   = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
+            tp2   = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
+            sl    = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
+
+            if score >= 35:
+                buy_alerts.append({
+                    "ticker": ticker, "score": score, "price": p,
+                    "change": sd.day_change_pct, "rsi": td.rsi_14,
+                    "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
+                    "breakout": td.is_breakout, "vol": sd.relative_volume,
+                })
+            elif score <= -35:
+                sell_alerts.append({
+                    "ticker": ticker, "score": score, "price": p,
+                    "change": sd.day_change_pct, "rsi": td.rsi_14,
+                })
+        except Exception as e:
+            logger.debug(f"[Tech] {ticker}: {e}")
+
+    logger.info(f"[Technical+Volume] {ts} -> {len(buy_alerts)} BUY | {len(sell_alerts)} SELL")
+
+    if not buy_alerts and not sell_alerts:
+        return  # Tidak ada sinyal kuat, tidak kirim notifikasi
+
+    NL = "\n"
+    msg = f"<b>Technical Scan — {ts}</b>\n\n"
+
+    if buy_alerts:
+        buy_alerts.sort(key=lambda x: x["score"], reverse=True)
+        lines = []
+        for r in buy_alerts[:8]:
+            tag = " BREAKOUT" if r["breakout"] else ""
+            vol_tag = f" Vol:{r['vol']:.1f}x" if r["vol"] >= 1.5 else ""
+            lines.append(
+                f"  <b>{r['ticker']}</b> {r['price']:,.0f} ({r['change']:+.1f}%){tag}{vol_tag}\n"
+                f"  Entry:{r['entry']:,.0f} TP1:{r['tp1']:,.0f} SL:{r['sl']:,.0f}"
+            )
+        msg += f"<b>BUY Signal ({len(buy_alerts)}):</b>\n" + NL.join(lines) + "\n\n"
+
+    if sell_alerts:
+        sell_alerts.sort(key=lambda x: x["score"])
+        lines = [
+            f"  <b>{r['ticker']}</b> {r['price']:,.0f} ({r['change']:+.1f}%) RSI:{r['rsi']:.0f}"
+            for r in sell_alerts[:5]
+        ]
+        msg += f"<b>SELL/Hindari ({len(sell_alerts)}):</b>\n" + NL.join(lines)
+
+    send_alert_chunked(msg)
+
+
+# ── 2. NEWS SENTIMENT — setiap 1 jam ──────────────────────────────────────────
+
+def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None:
+    """
+    Scan sentimen untuk semua ticker.
+    Jika trigger_fundamental_review=True pada hasil, jalankan Fundamental Agent
+    untuk ticker tersebut secara otomatis.
+    """
+    if not _is_market_hours() and trigger_fundamental_for is None:
+        return
+
+    from agents.news_sentiment_agent import NewsSentimentAgent
+    from utils.data_fetcher import fetch_stock_data
+    from utils.agent_cache import set as cache_set, get as cache_get
+
+    ts = _now().strftime("%H:%M WIB")
+    logger.info(f"[Sentiment] Scan dimulai — {ts}")
+
+    agent = NewsSentimentAgent()
+    tickers_to_scan = trigger_fundamental_for or DEFAULT_TICKERS
+    fund_triggers: list[str] = []  # Ticker yang butuh fundamental review
+
+    bearish_alerts, bullish_alerts = [], []
+
+    for ticker in tickers_to_scan:
+        try:
+            sd = fetch_stock_data(ticker)
+            if not sd.is_valid:
+                continue
+
+            result = agent.analyze(
+                ticker=ticker,
+                company_name=sd.company_name,
+                sector=sd.sector,
+                industry=sd.industry,
+                current_price=sd.current_price,
+                day_change_pct=sd.day_change_pct,
+                watchlist=DEFAULT_TICKERS,
+            )
+
+            # Cache hasil sentimen
+            cache_set(f"sentiment:{ticker}", result)
+
+            # Cek apakah perlu trigger fundamental
+            if result.get("trigger_fundamental_review"):
+                fund_triggers.append(ticker)
+                logger.info(f"[Sentiment] {ticker} -> fundamental review triggered!")
+
+            # Cek affected_tickers dari berita
+            for affected in result.get("affected_tickers", []):
+                t_full = affected + ".JK" if not affected.endswith(".JK") else affected
+                if t_full in DEFAULT_TICKERS and t_full not in fund_triggers:
+                    fund_triggers.append(t_full)
+                    logger.info(f"[Sentiment] {t_full} terdampak berita {ticker}")
+
+            sent = result.get("sentiment", "Neutral")
+            conf = result.get("confidence", 0)
+            fund_impact = result.get("fundamental_impact", "Unknown")
+
+            if sent == "Bearish" and conf >= 60:
+                bearish_alerts.append({
+                    "ticker": ticker, "conf": conf,
+                    "summary": result.get("summary", "")[:80],
+                    "fund_impact": fund_impact,
+                    "fund_reason": result.get("fundamental_reason", "")[:60],
+                })
+            elif sent == "Bullish" and conf >= 60:
+                bullish_alerts.append({
+                    "ticker": ticker, "conf": conf,
+                    "summary": result.get("summary", "")[:80],
+                    "fund_impact": fund_impact,
+                    "fund_reason": result.get("fundamental_reason", "")[:60],
+                })
+
+        except Exception as e:
+            logger.debug(f"[Sentiment] {ticker}: {e}")
+
+    logger.info(
+        f"[Sentiment] Selesai — {len(bullish_alerts)} Bullish | "
+        f"{len(bearish_alerts)} Bearish | {len(fund_triggers)} Fund Triggers"
+    )
+
+    # Kirim alert sentimen jika ada
+    if bullish_alerts or bearish_alerts:
+        NL = "\n"
+        msg = f"<b>Sentiment Scan — {ts}</b>\n\n"
+
+        if bullish_alerts:
+            lines = [
+                f"  <b>{a['ticker']}</b> ({a['conf']}%) — {a['summary']}\n"
+                f"  Dampak Fundamental: {a['fund_impact']} | {a['fund_reason']}"
+                for a in bullish_alerts[:5]
+            ]
+            msg += f"<b>Bullish ({len(bullish_alerts)}):</b>\n" + NL.join(lines) + "\n\n"
+
+        if bearish_alerts:
+            lines = [
+                f"  <b>{a['ticker']}</b> ({a['conf']}%) — {a['summary']}\n"
+                f"  Dampak Fundamental: {a['fund_impact']} | {a['fund_reason']}"
+                for a in bearish_alerts[:5]
+            ]
+            msg += f"<b>Bearish ({len(bearish_alerts)}):</b>\n" + NL.join(lines)
+
+        send_alert_chunked(msg)
+
+    # Auto-trigger Fundamental untuk saham yang perlu review
+    if fund_triggers:
+        unique = list(dict.fromkeys(fund_triggers))  # deduplicate
+        logger.info(f"[Sentiment] Auto-trigger Fundamental: {unique}")
+        _notify(
+            "🔍", "Fundamental Review Dipicu",
+            f"Sentimen mendeteksi berita signifikan.\n"
+            f"Memulai analisis fundamental: {', '.join(t.replace('.JK','') for t in unique[:5])}"
+        )
+        _run_thread(lambda: run_fundamental_targeted(unique), "fund-triggered")
+
+
+# ── 3. FUNDAMENTAL — 1x seminggu (+ dipicu otomatis oleh Sentiment) ───────────
+
+def run_fundamental_weekly() -> None:
+    """Analisis fundamental semua 58 saham — dijadwalkan setiap Senin pagi."""
+    logger.info("[Fundamental] Weekly scan dimulai...")
+    _notify("📊", "Fundamental Weekly Scan", f"Menganalisis {len(DEFAULT_TICKERS)} saham...")
+
+    from agents.fundamental_agent import FundamentalAgent
+    from utils.data_fetcher import fetch_stock_data
+    from utils.agent_cache import get as cache_get, set as cache_set
+
+    agent = FundamentalAgent()
+    results = {"strong_bullish": [], "bullish": [], "bearish": [], "weak": []}
+    NL = "\n"
+
+    for ticker in DEFAULT_TICKERS:
+        try:
+            # Ambil sentimen terkini dari cache untuk konteks
+            sent_cache = cache_get(f"sentiment:{ticker}", ttl=3600 * 24)
+
+            sd = fetch_stock_data(ticker)
+            if not sd.is_valid:
+                continue
+
+            result = agent.analyze(sd)
+            cache_set(f"fundamental:{ticker}", result)  # Cache 7 hari
+
+            status = result.get("status", "Neutral")
+            score  = result.get("score", 50)
+            sent_context = ""
+            if sent_cache:
+                sent_context = f" | Sentimen: {sent_cache.get('sentiment','?')}"
+
+            if status in ("Strong Bullish",):
+                results["strong_bullish"].append((ticker, score, sent_context))
+            elif status == "Bullish":
+                results["bullish"].append((ticker, score, sent_context))
+            elif status in ("Bearish", "Weak"):
+                results["bearish"].append((ticker, score, sent_context))
+
+            logger.info(f"[Fundamental] {ticker} -> {status} ({score}){sent_context}")
+        except Exception as e:
+            logger.error(f"[Fundamental] {ticker}: {e}")
+
+    # Format & kirim ringkasan
+    ts = _now().strftime("%d %b %Y")
+    msg = f"<b>Fundamental Weekly Report — {ts}</b>\n\n"
+
+    if results["strong_bullish"]:
+        lines = [f"  <b>{t}</b> Skor:{s}{ctx}" for t, s, ctx in results["strong_bullish"][:5]]
+        msg += f"<b>Strong Bullish:</b>\n" + NL.join(lines) + "\n\n"
+    if results["bullish"]:
+        lines = [f"  <b>{t}</b> Skor:{s}{ctx}" for t, s, ctx in results["bullish"][:8]]
+        msg += f"<b>Bullish:</b>\n" + NL.join(lines) + "\n\n"
+    if results["bearish"]:
+        lines = [f"  <b>{t}</b> Skor:{s}{ctx}" for t, s, ctx in results["bearish"][:5]]
+        msg += f"<b>Bearish/Weak:</b>\n" + NL.join(lines)
+
+    send_alert_chunked(msg)
+    logger.info("[Fundamental] Weekly scan selesai.")
+
+
+def run_fundamental_targeted(tickers: list[str]) -> None:
+    """
+    Analisis fundamental untuk saham tertentu saja.
+    Dipanggil otomatis oleh Sentiment Agent ketika ada berita signifikan.
+    """
+    from agents.fundamental_agent import FundamentalAgent
+    from utils.data_fetcher import fetch_stock_data
+    from utils.agent_cache import get as cache_get, set as cache_set
+
+    agent = FundamentalAgent()
+    NL = "\n"
+    results_lines = []
+    ts = _now().strftime("%H:%M WIB")
+
+    for ticker in tickers:
+        try:
+            # Ambil sentimen terkini dari cache
+            sent_cache = cache_get(f"sentiment:{ticker}", ttl=3600 * 4) or {}
+
+            sd = fetch_stock_data(ticker)
+            if not sd.is_valid:
+                continue
+
+            result = agent.analyze(sd)
+            cache_set(f"fundamental:{ticker}", result)
+
+            status = result.get("status", "Neutral")
+            score  = result.get("score", 50)
+            per    = result.get("per_assessment", "?")
+            summary = result.get("summary", "")[:100]
+            fund_impact = sent_cache.get("fundamental_impact", "")
+            fund_reason = sent_cache.get("fundamental_reason", "")
+
+            results_lines.append(
+                f"<b>{ticker}</b> — {status} (Skor:{score} | PER:{per})\n"
+                f"  {summary}\n"
+                + (f"  Sentimen: {sent_cache.get('sentiment','?')} | Dampak: {fund_impact}\n"
+                   f"  {fund_reason}" if fund_impact else "")
+            )
+            logger.info(f"[Fundamental-Targeted] {ticker} -> {status} | Sentiment: {sent_cache.get('sentiment','?')}")
+        except Exception as e:
+            logger.error(f"[Fundamental-Targeted] {ticker}: {e}")
+
+    if results_lines:
+        msg = (
+            f"<b>Fundamental Review (Dipicu Sentimen) — {ts}</b>\n"
+            f"<i>Saham: {', '.join(t.replace('.JK','') for t in tickers)}</i>\n\n"
+            + NL.join(results_lines)
+        )
+        send_alert_chunked(msg)
+
+
+# ── 4. MACRO — 1x sehari ──────────────────────────────────────────────────────
 
 def run_macro() -> None:
-    logger.info("[Scheduler] Menjalankan Macro Agent...")
-    _notify("🌐", "Macro Agent Aktif", "Menganalisis kondisi makro ekonomi global & domestik...")
+    from agents.macro_agent import MacroAgent
+    logger.info("[Macro] Analisis dimulai...")
+    _notify("🌐", "Macro Agent Aktif", "Menganalisis kondisi makro...")
     try:
-        from agents.macro_agent import MacroAgent
         agent = MacroAgent()
-        context = datetime.now().strftime("%Y-%m-%d %H:%M WIB")
+        context = _now().strftime("%Y-%m-%d %H:%M WIB")
         result = agent.analyze(context=context)
+        cache_set("macro:daily", result)
 
         cond = result.get("market_condition", "N/A")
         bias = result.get("ihsg_bias", "N/A")
-        pos  = ", ".join(result.get("positive_sectors", [])[:3])
+        pos  = ", ".join(result.get("positive_sectors", [])[:4])
         neg  = ", ".join(result.get("negative_sectors", [])[:3])
         summary = result.get("summary", "")
-
         bias_emoji = {"Bullish": "📈", "Bearish": "📉"}.get(bias, "➡️")
 
         msg = (
-            f"<b>🌐 Macro Update</b> — <i>{context}</i>\n\n"
+            f"<b>🌐 Macro Update — {_now().strftime('%d %b %Y')}</b>\n\n"
             f"<b>Kondisi:</b> {cond}\n"
             f"<b>IHSG Bias:</b> {bias_emoji} {bias}\n\n"
-            f"<b>Sektor Positif:</b> {pos or '-'}\n"
-            f"<b>Sektor Negatif:</b> {neg or '-'}\n\n"
+            f"<b>Positif:</b> {pos or '-'}\n"
+            f"<b>Negatif:</b> {neg or '-'}\n\n"
             f"<i>{summary}</i>"
         )
         send_alert_chunked(msg)
-        logger.info(f"[Scheduler] Macro done: {cond} | Bias: {bias}")
+        logger.info(f"[Macro] Selesai: {cond} | {bias}")
     except Exception as e:
-        logger.error(f"[Scheduler] Macro error: {e}")
-        _notify("❌", "Macro Agent Error", str(e)[:200])
+        logger.error(f"[Macro] Error: {e}")
+        _notify("❌", "Macro Error", str(e)[:150])
 
 
-def run_premarket() -> None:
-    logger.info("[Scheduler] Menjalankan Pre-Market Report...")
-    _notify("🌅", "Pre-Market Dimulai", "Menyiapkan briefing pre-market...")
+# ── 5. SUPERVISOR — closing market 15:50 ──────────────────────────────────────
+
+def run_supervisor_closing() -> None:
+    from agents.supervisor import SupervisorAI
+    from utils.report_generator import format_aftermarket_report, save_report
+
+    logger.info("[Supervisor] Closing scan dimulai...")
+    _notify("🔔", "Supervisor Closing Scan", f"Menganalisis {len(DEFAULT_TICKERS)} saham...")
+
     try:
-        from agents.supervisor import SupervisorAI
-        from agents.macro_agent import MacroAgent
-        from utils.report_generator import format_premarket_report, save_report
-
-        macro_agent = MacroAgent()
-        context = datetime.now().strftime("%Y-%m-%d %H:%M WIB")
-        macro = macro_agent.analyze(context=f"pre-market {context}")
-
-        supervisor = SupervisorAI()
-        quick_results = supervisor.screen(DEFAULT_TICKERS[:5], send_alerts=False)
-        watchlist = [
-            {
-                "ticker": r.get("ticker"),
-                "signal": r.get("final_signal"),
-                "confidence": r.get("confidence"),
-                "note": r.get("agent_results", {}).get("technical", {}).get("summary", "")[:60],
-            }
-            for r in quick_results
-        ]
-
-        report = format_premarket_report(
-            global_macro=macro.get("summary", "N/A"),
-            ihsg_outlook=(
-                f"Kondisi: {macro.get('market_condition')} | "
-                f"Bias: {macro.get('ihsg_bias')} | "
-                f"Positif: {', '.join(macro.get('positive_sectors', [])[:3])}"
-            ),
-            watchlist=watchlist,
-            top_news=macro.get("key_drivers", ["Tidak ada data"]),
-        )
-        save_report(report, "premarket")
-        send_alert_chunked(report)
-        logger.info("[Scheduler] Pre-market report sent.")
-    except Exception as e:
-        logger.error(f"[Scheduler] Pre-market error: {e}")
-        _notify("❌", "Pre-Market Report Error", str(e)[:200])
-
-
-def run_full_scan() -> None:
-    logger.info("[Scheduler] Menjalankan Full Scan semua ticker...")
-    _notify(
-        "📊", "Full Scan Dimulai",
-        f"Menganalisis {len(DEFAULT_TICKERS)} saham dengan 5 agent...\n"
-        f"Estimasi waktu: {len(DEFAULT_TICKERS) * 1} menit"
-    )
-    try:
-        from agents.supervisor import SupervisorAI
         supervisor = SupervisorAI()
         results = supervisor.screen(DEFAULT_TICKERS, send_alerts=True, min_confidence=0)
 
-        buy   = [r for r in results if r.get("final_signal") == "BUY"]
-        sell  = [r for r in results if r.get("final_signal") == "SELL"]
-        neut  = [r for r in results if r.get("final_signal") == "NEUTRAL"]
-
-        # Ringkasan scan
-        buy_list  = "\n".join(f"  🟢 {r['ticker']} — {r['confidence']}%" for r in buy[:5])
-        sell_list = "\n".join(f"  🔴 {r['ticker']} — {r['confidence']}%" for r in sell[:5])
-
-        ts = datetime.now().strftime("%H:%M WIB")
-        msg = (
-            f"<b>📊 Scan Selesai — {ts}</b>\n\n"
-            f"<b>Hasil:</b> {len(buy)} BUY | {len(sell)} SELL | {len(neut)} NEUTRAL\n\n"
-        )
-        if buy_list:
-            msg += f"<b>Top BUY:</b>\n{buy_list}\n\n"
-        if sell_list:
-            msg += f"<b>Top SELL:</b>\n{sell_list}\n"
-
-        send_alert_chunked(msg)
-        logger.info(f"[Scheduler] Full scan done: {len(buy)} BUY, {len(sell)} SELL")
-    except Exception as e:
-        logger.error(f"[Scheduler] Full scan error: {e}")
-        _notify("❌", "Full Scan Error", str(e)[:200])
-
-
-def run_quick_scan() -> None:
-    """Scan cepat — Technical + Volume only (tanpa LLM call berat)."""
-    logger.info("[Scheduler] Menjalankan Quick Scan (Technical + Volume)...")
-    _notify("🔍", "Quick Scan Dimulai", f"Scan {len(DEFAULT_TICKERS)} saham (Technical + Volume)...")
-    try:
-        from agents.supervisor import SupervisorAI
-        # Gunakan hanya ticker prioritas (top 5) untuk scan cepat
-        quick_tickers = DEFAULT_TICKERS[:6]
-        supervisor = SupervisorAI()
-        results = supervisor.screen(quick_tickers, send_alerts=True, min_confidence=65)
-
         buy  = [r for r in results if r.get("final_signal") == "BUY"]
         sell = [r for r in results if r.get("final_signal") == "SELL"]
+        neut = [r for r in results if r.get("final_signal") == "NEUTRAL"]
 
-        ts = datetime.now().strftime("%H:%M WIB")
-        if buy or sell:
-            buy_list  = "\n".join(f"  🟢 {r['ticker']} — {r['confidence']}%" for r in buy)
-            sell_list = "\n".join(f"  🔴 {r['ticker']} — {r['confidence']}%" for r in sell)
-            msg = (
-                f"<b>🔍 Quick Scan — {ts}</b>\n\n"
-                f"<b>Sinyal Kuat:</b>\n"
-                f"{buy_list}\n{sell_list}"
-            )
-            send_alert_chunked(msg)
-        else:
-            _notify("🔍", f"Quick Scan {ts}", "Tidak ada sinyal kuat saat ini. Market sideways.")
-
-        logger.info(f"[Scheduler] Quick scan done: {len(buy)} BUY, {len(sell)} SELL")
-    except Exception as e:
-        logger.error(f"[Scheduler] Quick scan error: {e}")
-        _notify("❌", "Quick Scan Error", str(e)[:200])
-
-
-def run_aftermarket() -> None:
-    logger.info("[Scheduler] Menjalankan After-Market Report...")
-    _notify("🌆", "After-Market Dimulai", "Menyiapkan laporan penutupan pasar...")
-    try:
-        from agents.supervisor import SupervisorAI
-        from agents.macro_agent import MacroAgent
-        from utils.report_generator import format_aftermarket_report, save_report
-
-        supervisor = SupervisorAI()
-        macro_agent = MacroAgent()
-        context = datetime.now().strftime("%Y-%m-%d %H:%M WIB")
-        macro = macro_agent.analyze(context=f"after-market {context}")
-
-        results = supervisor.screen(DEFAULT_TICKERS, send_alerts=False)
-        gainers = sorted(results, key=lambda r: r.get("day_change_pct", 0), reverse=True)[:5]
-        losers  = sorted(results, key=lambda r: r.get("day_change_pct", 0))[:5]
+        # Learning agent evaluation
         learning = supervisor.learning_agent.analyze()
 
-        report = format_aftermarket_report(
-            ihsg_summary=macro.get("summary", "N/A"),
-            top_gainers=[{"ticker": r["ticker"], "change_pct": r["day_change_pct"]} for r in gainers],
-            top_losers=[{"ticker": r["ticker"], "change_pct": r["day_change_pct"]} for r in losers],
-            foreign_flow=macro.get("ihsg_bias", "Neutral"),
-            sector_best=", ".join(macro.get("positive_sectors", ["N/A"])[:3]),
-            sector_worst=", ".join(macro.get("negative_sectors", ["N/A"])[:3]),
-            signal_eval=learning.get("summary", "Belum ada evaluasi."),
-            tomorrow_outlook=macro.get("summary", "N/A"),
+        NL = "\n"
+        ts = _now().strftime("%d %b %Y %H:%M WIB")
+        buy_lines = [
+            f"  <b>{r['ticker']}</b> {r['current_price']:,.0f} ({r['day_change_pct']:+.1f}%) — {r['confidence']}%"
+            for r in sorted(buy, key=lambda x: x["confidence"], reverse=True)[:8]
+        ]
+        sell_lines = [
+            f"  <b>{r['ticker']}</b> {r['current_price']:,.0f} ({r['day_change_pct']:+.1f}%) — {r['confidence']}%"
+            for r in sorted(sell, key=lambda x: x["confidence"], reverse=True)[:5]
+        ]
+
+        msg = (
+            f"<b>Supervisor Closing Report — {ts}</b>\n"
+            f"<b>{len(buy)} BUY | {len(sell)} SELL | {len(neut)} NEUTRAL</b>\n\n"
         )
-        save_report(report, "aftermarket")
-        send_alert_chunked(report)
-        logger.info("[Scheduler] After-market report sent.")
+        if buy_lines:
+            msg += f"<b>Top BUY:</b>\n" + NL.join(buy_lines) + "\n\n"
+        if sell_lines:
+            msg += f"<b>Top SELL:</b>\n" + NL.join(sell_lines) + "\n\n"
+        msg += f"<b>Evaluasi Sinyal:</b>\n{learning.get('summary','N/A')}"
+
+        send_alert_chunked(msg)
+        logger.info(f"[Supervisor] Selesai: {len(buy)} BUY | {len(sell)} SELL")
     except Exception as e:
-        logger.error(f"[Scheduler] After-market error: {e}")
-        _notify("❌", "After-Market Error", str(e)[:200])
+        logger.error(f"[Supervisor] Error: {e}")
+        _notify("❌", "Supervisor Error", str(e)[:150])
 
 
-# ── Core scheduler loop ────────────────────────────────────────────────────────
+# ── Kartu Jadwal ───────────────────────────────────────────────────────────────
 
-_FUNC_MAP = {
-    "run_macro":      run_macro,
-    "run_premarket":  run_premarket,
-    "run_full_scan":  run_full_scan,
-    "run_quick_scan": run_quick_scan,
-    "run_aftermarket": run_aftermarket,
-}
+def send_schedule_card() -> None:
+    ts = _now().strftime("%A, %d %B %Y %H:%M WIB")
+    msg = (
+        f"<b>IHSG System — Jadwal Agent</b>\n"
+        f"<i>{ts}</i>\n\n"
+        f"<b>Technical + Volume</b>\n"
+        f"  Setiap 15 menit | 09:00-16:00 WIB\n"
+        f"  Alert jika ada sinyal kuat (skor >=35)\n\n"
+        f"<b>News Sentiment</b>\n"
+        f"  Setiap 1 jam | 09:00-16:00 WIB\n"
+        f"  Auto-trigger Fundamental jika ada berita signifikan\n\n"
+        f"<b>Macro</b>\n"
+        f"  Setiap hari | 08:00 WIB\n\n"
+        f"<b>Fundamental</b>\n"
+        f"  Setiap Senin | 07:30 WIB (weekly)\n"
+        f"  + Dipicu otomatis oleh Sentiment saat ada\n"
+        f"    corporate action / berita fundamental\n\n"
+        f"<b>Supervisor</b>\n"
+        f"  Setiap hari kerja | 15:50 WIB (closing)\n\n"
+        f"<b>Watchlist:</b> {len(DEFAULT_TICKERS)} saham\n"
+        f"<i>Sistem berjalan di GitHub Actions — 24/7</i>"
+    )
+    ok = send_alert_chunked(msg)
+    print("Kartu jadwal terkirim!" if ok else "Gagal kirim.")
+    print(msg.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", ""))
 
 
-def _time_to_today(hhmm: str) -> datetime:
-    h, m = map(int, hhmm.split(":"))
-    now = datetime.now()
-    return now.replace(hour=h, minute=m, second=0, microsecond=0)
-
-
-def _run_in_thread(func_name: str) -> None:
-    fn = _FUNC_MAP.get(func_name)
-    if fn:
-        t = threading.Thread(target=fn, name=func_name, daemon=True)
-        t.start()
-
-
-def _is_weekday() -> bool:
-    return datetime.now().weekday() < 5  # Mon-Fri
-
+# ── Main Scheduler Loop ────────────────────────────────────────────────────────
 
 def run_scheduler() -> None:
     logger.info("=" * 50)
-    logger.info("  IHSG Scheduler aktif")
+    logger.info("  IHSG Scheduler v2 aktif")
+    logger.info(f"  Watchlist: {len(DEFAULT_TICKERS)} saham")
     logger.info("=" * 50)
 
-    # Kirim kartu jadwal ke Telegram saat startup
     send_schedule_card()
 
-    # Track last macro refresh
-    last_macro_refresh = datetime.now() - timedelta(hours=MACRO_REFRESH_HOURS)
+    # State tracker
+    last_technical  = _now() - timedelta(minutes=TECHNICAL_INTERVAL_MIN)
+    last_sentiment  = _now() - timedelta(minutes=SENTIMENT_INTERVAL_MIN)
+    last_macro_date = None
+    last_fund_week  = None
 
-    # Build today's job queue
-    def _build_queue() -> list[dict]:
-        queue = []
-        for job in SCHEDULE:
-            dt = _time_to_today(job["time"])
-            if dt > datetime.now():
-                queue.append({"dt": dt, "func": job["func"], "name": job["name"]})
-        queue.sort(key=lambda x: x["dt"])
-        return queue
-
-    job_queue = _build_queue()
-    logger.info(f"Jobs hari ini: {[j['name'] for j in job_queue]}")
+    # Jadwal harian (reset tiap hari)
+    supervisor_fired_today = False
+    today_date = _now().date()
 
     while True:
-        now = datetime.now()
+        now = _now()
 
-        # ── Jalankan scheduled jobs ──────────────────────────────────────────
-        for job in list(job_queue):
-            if now >= job["dt"]:
-                if _is_weekday():
-                    logger.info(f"[Scheduler] Menjalankan: {job['name']}")
-                    _run_in_thread(job["func"])
-                else:
-                    logger.info(f"[Scheduler] Weekend — skip {job['name']}")
-                job_queue.remove(job)
+        # Reset harian
+        if now.date() != today_date:
+            today_date = now.date()
+            supervisor_fired_today = False
+            logger.info(f"[Scheduler] Hari baru: {today_date}")
 
-        # ── Macro refresh setiap N jam ───────────────────────────────────────
-        if (now - last_macro_refresh).total_seconds() >= MACRO_REFRESH_HOURS * 3600:
-            if _is_weekday() and 8 <= now.hour < 17:
-                logger.info("[Scheduler] Macro refresh...")
-                _run_in_thread("run_macro")
-            last_macro_refresh = now
+        if _is_weekday():
+            # ── Technical + Volume (15 menit, jam market) ────────────────────
+            if (
+                _is_market_hours()
+                and (now - last_technical).total_seconds() >= TECHNICAL_INTERVAL_MIN * 60
+            ):
+                last_technical = now
+                _run_thread(run_technical_volume, "tech-vol")
 
-        # ── Reset queue untuk hari berikutnya ────────────────────────────────
-        if not job_queue and now.hour >= 17:
-            next_day_check = now.replace(hour=7, minute=55, second=0)
-            if now > next_day_check:
-                tomorrow = now + timedelta(days=1)
-                logger.info(f"[Scheduler] Queue habis. Reset besok: {tomorrow.strftime('%Y-%m-%d')}")
-                time.sleep(60)
-                job_queue = _build_queue()
+            # ── Sentiment (1 jam, jam market) ────────────────────────────────
+            if (
+                _is_market_hours()
+                and (now - last_sentiment).total_seconds() >= SENTIMENT_INTERVAL_MIN * 60
+            ):
+                last_sentiment = now
+                _run_thread(run_sentiment_scan, "sentiment")
+
+            # ── Macro (1x/hari jam 08:00) ─────────────────────────────────────
+            if (
+                last_macro_date != now.date()
+                and now.hour == 8 and now.minute < 5
+            ):
+                last_macro_date = now.date()
+                _run_thread(run_macro, "macro")
+
+            # ── Fundamental (1x/minggu Senin 07:30) ──────────────────────────
+            if (
+                now.weekday() == FUNDAMENTAL_WEEKDAY
+                and now.hour == 7 and 30 <= now.minute < 35
+                and last_fund_week != now.date()
+            ):
+                last_fund_week = now.date()
+                _run_thread(run_fundamental_weekly, "fund-weekly")
+
+            # ── Supervisor (closing 15:50) ────────────────────────────────────
+            if (
+                not supervisor_fired_today
+                and now.hour == 15 and 50 <= now.minute < 55
+            ):
+                supervisor_fired_today = True
+                _run_thread(run_supervisor_closing, "supervisor")
 
         time.sleep(30)  # Cek setiap 30 detik
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="IHSG Scheduler")
-    parser.add_argument(
-        "--send-schedule", action="store_true",
-        help="Hanya kirim kartu jadwal ke Telegram, lalu keluar"
-    )
+    parser = argparse.ArgumentParser(description="IHSG Scheduler v2")
+    parser.add_argument("--send-schedule", action="store_true",
+                        help="Kirim kartu jadwal ke Telegram lalu keluar")
     args = parser.parse_args()
 
     if args.send_schedule:

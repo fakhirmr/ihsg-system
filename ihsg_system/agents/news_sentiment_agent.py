@@ -1,6 +1,11 @@
 """
-IHSG Trading System — News Sentiment Agent
-Evaluates news sentiment for a specific stock or the overall market.
+IHSG Trading System -- News Sentiment Agent (v2)
+=================================================
+Upgrade dari v1:
+- Mendeteksi saham spesifik yang disebut dalam berita
+- Menilai dampak berita terhadap fundamental saham
+- Mengembalikan 'fundamental_impact' dan 'affected_tickers'
+  sehingga scheduler bisa trigger Fundamental Agent otomatis
 """
 from __future__ import annotations
 
@@ -13,32 +18,42 @@ logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """\
 Kamu adalah News Sentiment Agent untuk pasar saham Indonesia (IHSG).
-Tugasmu mengevaluasi sentimen berita terkait saham dan sektor tertentu.
+Tugasmu mengevaluasi sentimen berita dan dampaknya terhadap saham & fundamental.
 
 Kembalikan HANYA JSON valid tanpa teks tambahan, tanpa markdown, tanpa komentar.
 Format JSON wajib:
 {
   "sentiment": "<Bullish|Neutral|Bearish>",
   "confidence": <integer 0-100>,
-  "catalysts": ["<katalis positif 1>", "<katalis positif 2>"],
+  "catalysts": ["<katalis positif 1>"],
   "risks": ["<risiko/berita negatif 1>"],
-  "corporate_actions": ["<rights issue|buyback|merger|akuisisi|dividen|dll> jika ada"],
+  "corporate_actions": ["<rights issue|buyback|merger|dividen|dll> jika ada"],
   "reasons": ["<alasan sentimen 1>", "<alasan sentimen 2>"],
-  "summary": "<ringkasan sentimen dalam Bahasa Indonesia>"
+  "summary": "<ringkasan sentimen dalam Bahasa Indonesia>",
+  "fundamental_impact": "<Positive|Neutral|Negative|Unknown>",
+  "fundamental_reason": "<alasan dampak terhadap fundamental: revenue, margin, utang, dll>",
+  "trigger_fundamental_review": <true|false>,
+  "affected_tickers": ["<ticker lain yang terdampak berita ini, tanpa .JK>"]
 }
 
-Sumber berita prioritas: IDX, Bank Indonesia, Reuters, Bloomberg, CNBC Indonesia, Bisnis.com.
-Catatan: Jika informasi berita spesifik tidak tersedia, gunakan pengetahuan umum tentang sektor dan kondisi pasar.
+Aturan untuk trigger_fundamental_review = true:
+- Ada corporate action besar (merger, rights issue, akuisisi, divestasi)
+- Perubahan regulasi signifikan yang mempengaruhi bisnis
+- Kejutan earnings (beat/miss signifikan)
+- Pergantian manajemen kunci (CEO/CFO)
+- Masalah hukum/gagal bayar utang
+
+Sumber prioritas: IDX, Bank Indonesia, Reuters, Bloomberg, CNBC Indonesia, Bisnis.com.
 """
 
 _USER_TEMPLATE = """\
 Analisis sentimen berita untuk saham berikut:
 
-Ticker : {ticker}
-Nama   : {company_name}
-Sektor : {sector}
+Ticker  : {ticker}
+Nama    : {company_name}
+Sektor  : {sector}
 Industri: {industry}
-Harga  : {price:,.0f} IDR
+Harga   : {price:,.0f} IDR
 Perubahan: {change_pct:+.2f}%
 
 {news_section}
@@ -48,14 +63,24 @@ Pertimbangkan:
 2. Regulasi pemerintah yang mempengaruhi sektor
 3. Pergerakan harga komoditas terkait
 4. Sentimen investor asing terhadap sektor
-5. Aksi korporasi yang diumumkan
+5. Dampak berita terhadap fundamental: pendapatan, margin, utang, arus kas
+
+Daftar saham yang dimonitor (cek apakah ada yang terdampak berita ini):
+{watchlist}
 
 Kembalikan HANYA JSON sesuai format.
 """
 
 
 class NewsSentimentAgent(BaseAgent):
-    """Analyzes news sentiment for a stock using available information."""
+    """
+    Analyzes news sentiment for a stock.
+
+    Enhancements over v1:
+    - Returns fundamental_impact: how news affects fundamentals
+    - Returns trigger_fundamental_review: True if fundamental re-analysis needed
+    - Returns affected_tickers: other monitored stocks impacted by the same news
+    """
 
     def analyze(  # type: ignore[override]
         self,
@@ -66,22 +91,8 @@ class NewsSentimentAgent(BaseAgent):
         current_price: float = 0.0,
         day_change_pct: float = 0.0,
         news_text: Optional[str] = None,
+        watchlist: Optional[list[str]] = None,
     ) -> dict[str, Any]:
-        """
-        Analyze news sentiment.
-
-        Args:
-            ticker:         Stock ticker (e.g., 'BBRI.JK').
-            company_name:   Full company name.
-            sector:         Sector classification.
-            industry:       Industry classification.
-            current_price:  Latest stock price.
-            day_change_pct: Intraday price change percentage.
-            news_text:      Optional raw news text to inject into the prompt.
-
-        Returns:
-            Dict with sentiment, confidence, catalysts, risks, reasons, summary.
-        """
         fallback = {
             "sentiment": "Neutral",
             "confidence": 40,
@@ -90,6 +101,10 @@ class NewsSentimentAgent(BaseAgent):
             "corporate_actions": [],
             "reasons": ["Analisis berdasarkan pengetahuan umum sektor"],
             "summary": "Sentimen dievaluasi berdasarkan pengetahuan umum sektor.",
+            "fundamental_impact": "Unknown",
+            "fundamental_reason": "Tidak ada berita signifikan yang mempengaruhi fundamental.",
+            "trigger_fundamental_review": False,
+            "affected_tickers": [],
         }
 
         # Build news section
@@ -98,9 +113,14 @@ class NewsSentimentAgent(BaseAgent):
         else:
             news_section = (
                 "=== BERITA ===\n"
-                "Tidak ada berita spesifik yang disediakan. "
-                "Gunakan pengetahuan umum tentang sektor dan kondisi pasar terkini."
+                "Tidak ada berita spesifik. "
+                "Gunakan pengetahuan umum tentang kondisi terkini sektor ini."
             )
+
+        # Watchlist context (tanpa .JK suffix untuk readability)
+        wl_str = ", ".join(
+            t.replace(".JK", "") for t in (watchlist or [])
+        ) or "Tidak ada watchlist"
 
         user_message = _USER_TEMPLATE.format(
             ticker=ticker,
@@ -110,12 +130,22 @@ class NewsSentimentAgent(BaseAgent):
             price=current_price,
             change_pct=day_change_pct,
             news_section=news_section,
+            watchlist=wl_str,
         )
 
         result = self.call_claude_json(_SYSTEM_PROMPT, user_message, fallback)
 
+        # Ensure required fields exist
+        result.setdefault("fundamental_impact", "Unknown")
+        result.setdefault("fundamental_reason", "")
+        result.setdefault("trigger_fundamental_review", False)
+        result.setdefault("affected_tickers", [])
+
         logger.info(
-            f"[NewsSentimentAgent] {ticker} → "
-            f"Sentiment:{result.get('sentiment')} Conf:{result.get('confidence')}%"
+            f"[SentimentAgent] {ticker} -> "
+            f"Sentiment:{result.get('sentiment')} | "
+            f"FundImpact:{result.get('fundamental_impact')} | "
+            f"TriggerFund:{result.get('trigger_fundamental_review')} | "
+            f"Affected:{result.get('affected_tickers')}"
         )
         return result

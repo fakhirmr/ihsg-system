@@ -1,0 +1,25 @@
+name: "Technical+Volume — Every 15 Min (Market Hours)"
+
+on:
+  schedule:
+    # 09:00-16:00 WIB = 02:00-09:00 UTC, setiap 15 menit, Senin-Jumat
+    - cron: "*/15 2-8 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  technical-volume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - run: pip install -r ihsg_system/requirements.txt
+      - name: Run Technical + Volume Fast Scan
+        working-directory: ihsg_system
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python technical_screener.py
