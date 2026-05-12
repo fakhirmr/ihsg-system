@@ -33,9 +33,47 @@ MAX_TOKENS: int = 2048
 
 # ─── Default Watchlist (Yahoo Finance format) ──────────────
 DEFAULT_TICKERS: list[str] = [
-    "BBRI.JK", "BBCA.JK", "BMRI.JK", "TLKM.JK",
-    "ASII.JK", "ANTM.JK", "PTBA.JK", "MDKA.JK",
-    "GOTO.JK", "BYAN.JK",
+    # ── Energi & Migas ─────────────────────────────────────
+    "PGAS.JK", "BIPI.JK", "ENRG.JK", "ELSA.JK",
+    "MEDC.JK", "ADMR.JK", "PTRO.JK", "ADRO.JK",
+
+    # ── Batubara ───────────────────────────────────────────
+    "PTBA.JK", "ITMG.JK", "INDY.JK", "HRUM.JK",
+    "DEWA.JK", "BUMI.JK", "DKFT.JK", "ARKO.JK",
+
+    # ── Nikel, Mineral & Tambang ───────────────────────────
+    "ANTM.JK", "INCO.JK", "NCKL.JK", "MDKA.JK",
+    "AMMN.JK", "MBMA.JK", "BRMS.JK", "ESSA.JK",
+    "TINS.JK", "PGEO.JK",
+
+    # ── Perkebunan & Agribisnis ────────────────────────────
+    "LSIP.JK", "TAPG.JK", "DSNG.JK", "AADI.JK",
+
+    # ── Perbankan ──────────────────────────────────────────
+    "BBCA.JK", "BBNI.JK", "BRIS.JK", "NISP.JK",
+    "BNGA.JK",
+
+    # ── Industri & Otomotif ────────────────────────────────
+    "ASII.JK", "UNTR.JK", "BRPT.JK", "BNBR.JK",
+
+    # ── Konsumer & Retail ──────────────────────────────────
+    "ICBP.JK", "INDF.JK", "UNVR.JK", "AMRT.JK",
+
+    # ── Telekomunikasi & Teknologi ─────────────────────────
+    "ISAT.JK", "EXCL.JK", "INET.JK", "PSKT.JK",
+    "BUKA.JK", "CDIA.JK",
+
+    # ── Media & Hiburan ────────────────────────────────────
+    "SCMA.JK",
+
+    # ── Infrastruktur & Transportasi ──────────────────────
+    "RAJA.JK", "LEAD.JK", "RATU.JK",
+
+    # ── Asuransi & Keuangan lain ───────────────────────────
+    "AHAP.JK", "KEEN.JK",
+
+    # ── Lain-lain ──────────────────────────────────────────
+    "ELIT.JK", "CPRO.JK", "BKSL.JK",
 ]
 
 # ─── Analysis Settings ─────────────────────────────────────
