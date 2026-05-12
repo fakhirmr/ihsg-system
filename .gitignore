@@ -1,0 +1,30 @@
+# Environment variables — JANGAN di-upload ke GitHub!
+.env
+*.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Data & logs (regenerated at runtime)
+ihsg_system/data/*.json
+ihsg_system/logs/*.log
+ihsg_system/reports/*.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

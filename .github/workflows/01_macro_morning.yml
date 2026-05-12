@@ -1,0 +1,33 @@
+name: "08:00 - Macro Morning"
+
+on:
+  schedule:
+    # 08:00 WIB = 01:00 UTC (WIB = UTC+7)
+    - cron: "0 1 * * 1-5"   # Senin-Jumat
+  workflow_dispatch:          # Bisa trigger manual dari GitHub
+
+jobs:
+  macro-morning:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r ihsg_system/requirements.txt
+
+      - name: Run Macro Agent
+        working-directory: ihsg_system
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LLM_PROVIDER: auto
+        run: python run_job.py --job macro
