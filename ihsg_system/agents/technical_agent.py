@@ -1,6 +1,15 @@
 """
-IHSG Trading System — Technical Analysis Agent
-Generates entry/TP/SL signals from computed technical indicators.
+IHSG Trading System — Technical Analysis Agent (Orchestrator)
+=============================================================
+TechnicalAgent kini menjadi orchestrator yang menjalankan 5 sub-agent
+spesialis strategi, lalu memilih sinyal dengan confidence tertinggi.
+
+Sub-agents:
+  1. BuyOnWeaknessAgent     — Pullback ke EMA dalam uptrend
+  2. BuyOnBreakoutAgent     — Break resistance + volume spike
+  3. ReversalBounceAgent    — Oversold + bounce dari support
+  4. MomentumContinuationAgent — Tren kuat + MACD + Higher High
+  5. RangeSupportBuyAgent   — Beli di support dalam sideways
 """
 from __future__ import annotations
 
@@ -8,142 +17,134 @@ import logging
 from typing import Any
 
 from agents.base_agent import BaseAgent
+from agents.technical_sub_agents import (
+    BuyOnWeaknessAgent,
+    BuyOnBreakoutAgent,
+    ReversalBounceAgent,
+    MomentumContinuationAgent,
+    RangeSupportBuyAgent,
+)
 from utils.data_fetcher import StockData
 from utils.technical_calculator import TechnicalData
 
 logger = logging.getLogger(__name__)
 
+# Sub-agents diinstansiasi sekali (lazy, shared)
+_SUB_AGENTS: dict[str, BaseAgent] | None = None
+
+
+def _get_sub_agents() -> dict[str, BaseAgent]:
+    global _SUB_AGENTS
+    if _SUB_AGENTS is None:
+        _SUB_AGENTS = {
+            "Buy on Weakness":       BuyOnWeaknessAgent(),
+            "Buy on Breakout":       BuyOnBreakoutAgent(),
+            "Reversal Bounce":       ReversalBounceAgent(),
+            "Momentum Continuation": MomentumContinuationAgent(),
+            "Range Support Buy":     RangeSupportBuyAgent(),
+        }
+    return _SUB_AGENTS
+
+
 _SYSTEM_PROMPT = """\
 Kamu adalah Technical Analysis Agent untuk saham IHSG Indonesia yang sangat berpengalaman.
-Kamu menganalisis indikator teknikal dan menentukan sinyal trading dengan entry, TP, dan SL.
-
-Kembalikan HANYA JSON valid tanpa teks tambahan, tanpa markdown, tanpa komentar.
+Kembalikan HANYA JSON valid tanpa teks tambahan.
 Format JSON wajib:
 {
   "signal": "<BUY|SELL|NEUTRAL>",
   "confidence": <integer 0-100>,
-  "entry": <float harga entry>,
-  "tp1": <float target profit 1>,
-  "tp2": <float target profit 2>,
-  "sl": <float stop loss>,
+  "entry": <float>,
+  "tp1": <float>,
+  "tp2": <float>,
+  "sl": <float>,
   "timeframe": "<Scalping|Intraday|Swing|Position>",
-  "reasons": ["<alasan teknikal 1>", "<alasan teknikal 2>"],
-  "invalidation": "<kondisi yang membatalkan sinyal>",
-  "summary": "<ringkasan singkat dalam Bahasa Indonesia>"
+  "reasons": ["<alasan 1>", "<alasan 2>"],
+  "invalidation": "<kondisi pembatalan>",
+  "summary": "<ringkasan Bahasa Indonesia>"
 }
-
-Aturan wajib:
-- Entry harus dekat harga saat ini (±2%)
-- TP1 dan TP2 harus realistis berdasarkan ATR dan resistance
-- SL harus di bawah support untuk BUY, di atas resistance untuk SELL
-- Risk:Reward minimal 1:1.5
-- Jika sinyal NEUTRAL, tetap isi entry=TP1=TP2=SL=harga saat ini
 """
 
 
 class TechnicalAgent(BaseAgent):
-    """Generates BUY/SELL signals with precise entry, TP, and SL levels."""
+    """
+    Orchestrator teknikal: menjalankan 5 sub-agent strategi,
+    memilih sinyal dengan confidence tertinggi, dan melaporkan
+    strategi mana yang aktif.
+    """
 
     def analyze(  # type: ignore[override]
         self, stock_data: StockData, tech_data: TechnicalData
     ) -> dict[str, Any]:
-        """
-        Run technical analysis.
-
-        Args:
-            stock_data: Raw stock data (price, volume).
-            tech_data:  Computed indicators from technical_calculator.
-
-        Returns:
-            Dict with signal, confidence, entry, tp1, tp2, sl, reasons, etc.
-        """
+        p = stock_data.current_price
         fallback = {
-            "signal": "NEUTRAL",
-            "confidence": 0,
-            "entry": stock_data.current_price,
-            "tp1": stock_data.current_price,
-            "tp2": stock_data.current_price,
-            "sl": stock_data.current_price,
-            "timeframe": "Swing",
-            "reasons": ["Data teknikal tidak mencukupi"],
-            "invalidation": "N/A",
+            "signal": "NEUTRAL", "confidence": 0,
+            "entry": p, "tp1": p, "tp2": p, "sl": p,
+            "timeframe": "Swing", "strategy": "None",
+            "reasons": ["Data tidak mencukupi"], "invalidation": "N/A",
             "summary": "Analisis teknikal tidak dapat diselesaikan.",
+            "sub_signals": {},
         }
 
-        if not stock_data.is_valid or stock_data.current_price <= 0:
+        if not stock_data.is_valid or p <= 0:
             return fallback
 
-        user_message = self._build_prompt(stock_data, tech_data)
-        result = self.call_claude_json(_SYSTEM_PROMPT, user_message, fallback)
+        sub_agents = _get_sub_agents()
+        sub_results: dict[str, dict] = {}
 
-        # Sanity check: ensure numeric fields are float
+        for name, agent in sub_agents.items():
+            try:
+                sub_results[name] = agent.analyze(stock_data, tech_data)
+            except Exception as e:
+                logger.warning(f"[TechOrchestrator] {stock_data.ticker} {name}: {e}")
+
+        # Pilih sinyal terbaik
+        best: dict[str, Any] | None = None
+        for r in sub_results.values():
+            sig  = r.get("signal", "NEUTRAL")
+            conf = r.get("confidence", 0)
+            if best is None:
+                best = r
+            else:
+                bsig  = best.get("signal", "NEUTRAL")
+                bconf = best.get("confidence", 0)
+                if (bsig == "NEUTRAL" and sig != "NEUTRAL") or \
+                   (sig != "NEUTRAL" and conf > bconf) or \
+                   (sig == "NEUTRAL" and conf > bconf and bsig == "NEUTRAL"):
+                    best = r
+
+        if best is None:
+            return fallback
+
         for field in ("entry", "tp1", "tp2", "sl"):
             try:
-                result[field] = float(result[field])
+                best[field] = float(best[field])
             except (TypeError, ValueError, KeyError):
-                result[field] = stock_data.current_price
+                best[field] = p
 
-        result.setdefault("confidence", 0)
-        result.setdefault("signal", "NEUTRAL")
+        best.setdefault("timeframe", "Swing")
+        best.setdefault("invalidation", "N/A")
+        best["sub_signals"] = {
+            name: {"signal": r.get("signal"), "confidence": r.get("confidence")}
+            for name, r in sub_results.items()
+        }
 
         logger.info(
-            f"[TechnicalAgent] {stock_data.ticker} → "
-            f"Signal:{result['signal']} Conf:{result['confidence']}% "
-            f"Entry:{result['entry']:,.0f} TP1:{result['tp1']:,.0f} SL:{result['sl']:,.0f}"
+            f"[TechOrchestrator] {stock_data.ticker} -> "
+            f"Strategy:{best.get('strategy')} | "
+            f"Signal:{best.get('signal')} Conf:{best.get('confidence')}% | "
+            f"Entry:{best.get('entry'):,.0f} TP1:{best.get('tp1'):,.0f}"
         )
-        return result
+        return best
 
-    def _build_prompt(self, sd: StockData, td: TechnicalData) -> str:
-        def _fmt(v: float) -> str:
-            return f"{v:,.2f}" if v else "N/A"
+    def get_all_strategies(
+        self, stock_data: StockData, tech_data: TechnicalData
+    ) -> dict[str, dict[str, Any]]:
+        """Jalankan semua sub-agent, kembalikan semua hasil per strategi."""
+        results = {}
+        for name, agent in _get_sub_agents().items():
+            try:
+                results[name] = agent.analyze(stock_data, tech_data)
+            except Exception as e:
+                logger.warning(f"[TechOrchestrator] {stock_data.ticker} {name}: {e}")
+        return results
 
-        trend_emoji = {
-            "UPTREND": "📈 UPTREND",
-            "DOWNTREND": "📉 DOWNTREND",
-            "NEUTRAL": "➡️ NEUTRAL",
-        }.get(td.trend, td.trend)
-
-        lines = [
-            f"=== TECHNICAL DATA: {sd.ticker} ({sd.company_name}) ===",
-            f"Harga Saat Ini: {_fmt(sd.current_price)}",
-            f"Open: {_fmt(sd.day_open)} | High: {_fmt(sd.day_high)} | Low: {_fmt(sd.day_low)}",
-            f"Perubahan Harian: {sd.day_change_pct:+.2f}%",
-            f"Relative Volume: {sd.relative_volume:.2f}x rata-rata 20 hari",
-            "",
-            "--- MOVING AVERAGES ---",
-            f"EMA 20 : {_fmt(td.ema_20)} {'▲ Di Atas' if td.is_above_ema20 else '▼ Di Bawah'}",
-            f"EMA 50 : {_fmt(td.ema_50)} {'▲ Di Atas' if td.is_above_ema50 else '▼ Di Bawah'}",
-            f"EMA 200: {_fmt(td.ema_200)} {'▲ Di Atas' if td.is_above_ema200 else '▼ Di Bawah'}",
-            f"Jarak dari EMA20: {td.price_vs_ema20:+.2f}%",
-            "",
-            "--- MOMENTUM ---",
-            f"RSI (14): {td.rsi_14:.1f} {'(Overbought)' if td.rsi_14 > 70 else '(Oversold)' if td.rsi_14 < 30 else '(Normal)'}",
-            f"MACD Line   : {td.macd_line:+.4f}",
-            f"MACD Signal : {td.macd_signal:+.4f}",
-            f"MACD Histogram: {td.macd_histogram:+.4f} {'(Bullish momentum)' if td.macd_histogram > 0 else '(Bearish momentum)'}",
-            "",
-            "--- BOLLINGER BANDS ---",
-            f"BB Upper : {_fmt(td.bb_upper)}",
-            f"BB Middle: {_fmt(td.bb_middle)}",
-            f"BB Lower : {_fmt(td.bb_lower)}",
-            "",
-            "--- SUPPORT & RESISTANCE ---",
-            f"Resistance 2: {_fmt(td.resistance_2)}",
-            f"Resistance 1: {_fmt(td.resistance_1)}",
-            f"Support 1   : {_fmt(td.support_1)}",
-            f"Support 2   : {_fmt(td.support_2)}",
-            f"VWAP        : {_fmt(td.vwap)}",
-            "",
-            "--- TREND & PATTERN ---",
-            f"Tren       : {trend_emoji}",
-            f"ATR (14)   : {_fmt(td.atr_14)}",
-            f"Breakout   : {'✅ YA' if td.is_breakout else '❌ Tidak'}",
-            f"Breakdown  : {'✅ YA' if td.is_breakdown else '❌ Tidak'}",
-            f"Higher High: {'✅ YA' if td.higher_high else '❌ Tidak'}",
-            f"Lower Low  : {'✅ YA' if td.lower_low else '❌ Tidak'}",
-            "",
-            "Berikan sinyal trading dengan entry, TP1, TP2, dan SL yang spesifik. "
-            "Kembalikan HANYA JSON sesuai format.",
-        ]
-
-        return "\n".join(lines)
