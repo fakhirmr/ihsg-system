@@ -52,6 +52,55 @@ class StockData:
     is_valid: bool = False
 
 
+def fetch_news(ticker: str, max_items: int = 5) -> str:
+    """
+    Ambil berita terkini dari Yahoo Finance untuk satu ticker.
+    Mengembalikan string ringkasan headline, atau string kosong jika tidak ada.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        news_items = stock.news or []
+        if not news_items:
+            return ""
+
+        lines = []
+        for item in news_items[:max_items]:
+            # yfinance news format bervariasi antar versi
+            content = item.get("content", item)
+            title = (
+                content.get("title")
+                or item.get("title")
+                or ""
+            ).strip()
+            publisher = (
+                content.get("provider", {}).get("displayName")
+                or item.get("publisher")
+                or ""
+            )
+            if title:
+                lines.append(f"- {title}" + (f" [{publisher}]" if publisher else ""))
+
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.debug(f"[fetch_news] {ticker}: {exc}")
+        return ""
+
+
+def fetch_market_news(max_items: int = 8) -> str:
+    """
+    Ambil berita market-wide IHSG dari Yahoo Finance (^JKSE + IDR=X).
+    Digunakan untuk mendeteksi event besar: MSCI, BI Rate, Fed, dll.
+    """
+    combined: list[str] = []
+    for source_ticker in ["^JKSE", "IDR=X", "EIDO"]:
+        text = fetch_news(source_ticker, max_items=max_items)
+        if text:
+            combined.append(text)
+        if len(combined) >= 2:
+            break
+    return "\n".join(combined)
+
+
 def fetch_stock_data(ticker: str, period: str = "3mo") -> StockData:
     """
     Fetch comprehensive stock data from Yahoo Finance.

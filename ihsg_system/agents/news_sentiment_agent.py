@@ -42,8 +42,16 @@ Aturan untuk trigger_fundamental_review = true:
 - Kejutan earnings (beat/miss signifikan)
 - Pergantian manajemen kunci (CEO/CFO)
 - Masalah hukum/gagal bayar utang
+- EVENT INDEX PASAR: masuk/keluar MSCI, FTSE, S&P, penambahan/penghapusan dari indeks global
+- KEBIJAKAN MONETER: perubahan BI Rate, keputusan Fed yang mengejutkan, perubahan GWM
+- SENTIMEN ASING: capital outflow/inflow besar, rebalancing dana asing, rating upgrade/downgrade RI
 
-Sumber prioritas: IDX, Bank Indonesia, Reuters, Bloomberg, CNBC Indonesia, Bisnis.com.
+Jika berita menyebut MSCI, FTSE, index rebalancing, atau aliran dana asing signifikan:
+- Set trigger_fundamental_review = true
+- Set affected_tickers = saham-saham yang kemungkinan besar masuk/keluar indeks tersebut
+- Nilai fundamental_impact berdasarkan prediksi inflow/outflow yang akan terjadi
+
+Sumber prioritas: IDX, Bank Indonesia, Reuters, Bloomberg, CNBC Indonesia, Bisnis.com, Kontan.
 """
 
 _USER_TEMPLATE = """\
@@ -58,12 +66,15 @@ Perubahan: {change_pct:+.2f}%
 
 {news_section}
 
+{market_news_section}
+
 Pertimbangkan:
 1. Berita korporasi terkini (earnings, dividen, rights issue, buyback, RUPS)
 2. Regulasi pemerintah yang mempengaruhi sektor
 3. Pergerakan harga komoditas terkait
 4. Sentimen investor asing terhadap sektor
 5. Dampak berita terhadap fundamental: pendapatan, margin, utang, arus kas
+6. Event pasar besar: MSCI/FTSE rebalancing, perubahan BI Rate, kebijakan Fed
 
 Daftar saham yang dimonitor (cek apakah ada yang terdampak berita ini):
 {watchlist}
@@ -91,6 +102,7 @@ class NewsSentimentAgent(BaseAgent):
         current_price: float = 0.0,
         day_change_pct: float = 0.0,
         news_text: Optional[str] = None,
+        market_news_text: Optional[str] = None,
         watchlist: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         fallback = {
@@ -107,15 +119,20 @@ class NewsSentimentAgent(BaseAgent):
             "affected_tickers": [],
         }
 
-        # Build news section
+        # Build news section per saham
         if news_text and news_text.strip():
-            news_section = f"=== BERITA TERKINI ===\n{news_text.strip()}"
+            news_section = f"=== BERITA SAHAM {ticker} ===\n{news_text.strip()}"
         else:
             news_section = (
-                "=== BERITA ===\n"
-                "Tidak ada berita spesifik. "
-                "Gunakan pengetahuan umum tentang kondisi terkini sektor ini."
+                f"=== BERITA SAHAM {ticker} ===\n"
+                "Tidak ada berita spesifik untuk saham ini."
             )
+
+        # Build market-wide news section (MSCI, BI Rate, Fed, dll)
+        if market_news_text and market_news_text.strip():
+            market_news_section = f"=== BERITA PASAR / EVENT BESAR (IHSG) ===\n{market_news_text.strip()}"
+        else:
+            market_news_section = ""
 
         # Watchlist context (tanpa .JK suffix untuk readability)
         wl_str = ", ".join(
@@ -130,6 +147,7 @@ class NewsSentimentAgent(BaseAgent):
             price=current_price,
             change_pct=day_change_pct,
             news_section=news_section,
+            market_news_section=market_news_section,
             watchlist=wl_str,
         )
 

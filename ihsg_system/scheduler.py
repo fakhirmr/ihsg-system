@@ -29,7 +29,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Any
+
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -42,7 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Scheduler")
 
-from config import DEFAULT_TICKERS, MIN_CONFIDENCE_ALERT
+from config import DEFAULT_TICKERS
 from utils.telegram_sender import send_alert_chunked, send_message
 from utils.agent_cache import get as cache_get, set as cache_set
 
@@ -193,7 +193,7 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
         return
 
     from agents.news_sentiment_agent import NewsSentimentAgent
-    from utils.data_fetcher import fetch_stock_data
+    from utils.data_fetcher import fetch_stock_data, fetch_news, fetch_market_news
     from utils.agent_cache import set as cache_set, get as cache_get
 
     ts = _now().strftime("%H:%M WIB")
@@ -205,11 +205,21 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
 
     bearish_alerts, bullish_alerts = [], []
 
+    # Fetch berita market-wide sekali (IHSG, MSCI, BI Rate, Fed, dll)
+    market_news = fetch_market_news(max_items=8)
+    if market_news:
+        logger.info(f"[Sentiment] Market news fetched ({len(market_news)} chars)")
+    else:
+        logger.info("[Sentiment] Tidak ada market news dari yfinance")
+
     for ticker in tickers_to_scan:
         try:
             sd = fetch_stock_data(ticker)
             if not sd.is_valid:
                 continue
+
+            # Fetch berita spesifik per saham
+            stock_news = fetch_news(ticker, max_items=5)
 
             result = agent.analyze(
                 ticker=ticker,
@@ -218,6 +228,8 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                 industry=sd.industry,
                 current_price=sd.current_price,
                 day_change_pct=sd.day_change_pct,
+                news_text=stock_news,
+                market_news_text=market_news,
                 watchlist=DEFAULT_TICKERS,
             )
 
@@ -494,6 +506,118 @@ def run_supervisor_closing() -> None:
         _notify("❌", "Supervisor Error", str(e)[:150])
 
 
+# ── 6. BROKER FLOW — setelah market close 17:00 ───────────────────────────────
+
+def run_broker_summary() -> None:
+    """Analisis Net Foreign Flow market-wide + korelasi dengan 58 saham watchlist."""
+    from datetime import date as date_cls
+    from utils.broker_fetcher import fetch_market_broker_summary
+    from utils.data_fetcher import fetch_stock_data
+    from agents.broker_agent import BrokerAgent
+
+    ts = _now().strftime("%d %b %Y")
+    logger.info(f"[Broker] Net Foreign Flow analysis dimulai — {ts}")
+    _notify("🏦", "Broker Flow Analysis", "Menganalisis Net Foreign Flow pasar...")
+
+    agent = BrokerAgent()
+    today = date_cls.today()
+
+    # 1. Ambil broker summary market-wide
+    broker_data = fetch_market_broker_summary(today)
+    if broker_data.get("error") or broker_data.get("broker_count", 0) == 0:
+        _notify("🏦", "Broker Flow", f"Data broker tidak tersedia: {broker_data.get('error','?')}")
+        return
+
+    logger.info(
+        f"[Broker] Data OK: {broker_data['broker_count']} broker | "
+        f"Asing: {broker_data['foreign_value_pct']:.1f}%"
+    )
+
+    # 2. Ambil data IHSG + 58 saham watchlist untuk korelasi
+    ihsg_change_pct = 0.0
+    try:
+        import yfinance as yf
+        ihsg = yf.Ticker("^JKSE")
+        hist = ihsg.history(period="2d")
+        if len(hist) >= 2:
+            ihsg_change_pct = (hist["Close"].iloc[-1] / hist["Close"].iloc[-2] - 1) * 100
+    except Exception:
+        pass
+
+    top_movers: list[dict] = []
+    for ticker in DEFAULT_TICKERS:
+        try:
+            sd = fetch_stock_data(ticker)
+            if sd.is_valid and abs(sd.day_change_pct) >= 1.5:
+                top_movers.append({
+                    "ticker": ticker.replace(".JK", ""),
+                    "change_pct": sd.day_change_pct,
+                    "volume_ratio": sd.relative_volume,
+                })
+        except Exception:
+            pass
+
+    top_movers.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
+    logger.info(f"[Broker] IHSG: {ihsg_change_pct:+.2f}% | {len(top_movers)} saham bergerak ≥1.5%")
+
+    # 3. Analisis LLM
+    result = agent.analyze(
+        broker_data=broker_data,
+        ihsg_change_pct=ihsg_change_pct,
+        top_movers=top_movers[:15],
+    )
+
+    # 4. Format & kirim Telegram
+    def _fmt(v: float) -> str:
+        if abs(v) >= 1e12:
+            return f"{v/1e12:.2f}T"
+        elif abs(v) >= 1e9:
+            return f"{v/1e9:.2f}M"
+        return f"{v/1e6:.0f}jt"
+
+    foreign_pct = broker_data["foreign_value_pct"]
+    sentiment = result.get("foreign_sentiment", "Neutral")
+    signal = result.get("market_signal", "Neutral")
+    signal_emoji = {"Bullish": "📈", "Bearish": "📉"}.get(signal, "➡️")
+    strength = result.get("flow_strength", "")
+
+    NL = "\n"
+
+    # Top foreign brokers
+    fg_lines = [
+        f"  {code} ({name[:20]}): {_fmt(val)}"
+        for code, name, val in broker_data["top_foreign_brokers"][:5]
+    ]
+
+    # Top movers yang relevan
+    buy_movers = [m for m in top_movers if m["change_pct"] > 0][:5]
+    sell_movers = [m for m in top_movers if m["change_pct"] < 0][:3]
+    mover_text = ""
+    if buy_movers:
+        mover_text += "  ▲ " + " | ".join(f"{m['ticker']} +{m['change_pct']:.1f}%" for m in buy_movers) + "\n"
+    if sell_movers:
+        mover_text += "  ▼ " + " | ".join(f"{m['ticker']} {m['change_pct']:.1f}%" for m in sell_movers)
+
+    observations = result.get("key_observations", [])
+
+    msg = (
+        f"<b>🏦 Net Foreign Flow — {ts}</b>\n\n"
+        f"<b>Signal: {signal_emoji} {signal}</b> | {sentiment} ({strength})\n\n"
+        f"<b>Statistik Hari Ini:</b>\n"
+        f"  Total Transaksi  : {_fmt(broker_data['total_value'])}\n"
+        f"  Nilai Asing      : {_fmt(broker_data['foreign_value'])} ({foreign_pct:.1f}%)\n"
+        f"  Nilai Domestik   : {_fmt(broker_data['domestic_value'])} ({100-foreign_pct:.1f}%)\n"
+        f"  IHSG             : {ihsg_change_pct:+.2f}%\n\n"
+        f"<b>Broker Asing Paling Aktif:</b>\n" + NL.join(fg_lines) + "\n\n"
+        f"<b>Saham Watchlist Bergerak Signifikan:</b>\n{mover_text or '  (tidak ada)'}\n\n"
+        f"<b>Analisis:</b>\n" + NL.join(f"• {o}" for o in observations[:3]) + "\n\n"
+        f"<i>{result.get('summary', '')}</i>"
+    )
+
+    send_alert_chunked(msg)
+    logger.info(f"[Broker] Selesai — Signal:{signal} | Asing:{foreign_pct:.1f}% | IHSG:{ihsg_change_pct:+.2f}%")
+
+
 # ── Kartu Jadwal ───────────────────────────────────────────────────────────────
 
 def send_schedule_card() -> None:
@@ -515,6 +639,9 @@ def send_schedule_card() -> None:
         f"    corporate action / berita fundamental\n\n"
         f"<b>Supervisor</b>\n"
         f"  Setiap hari kerja | 15:50 WIB (closing)\n\n"
+        f"<b>Broker Flow</b>\n"
+        f"  Setiap hari kerja | 17:00 WIB (post-close)\n"
+        f"  Analisis aliran dana asing vs domestik (20 saham prioritas)\n\n"
         f"<b>Watchlist:</b> {len(DEFAULT_TICKERS)} saham\n"
         f"<i>Sistem berjalan di GitHub Actions — 24/7</i>"
     )
@@ -541,6 +668,7 @@ def run_scheduler() -> None:
 
     # Jadwal harian (reset tiap hari)
     supervisor_fired_today = False
+    broker_fired_today = False
     today_date = _now().date()
 
     while True:
@@ -550,6 +678,7 @@ def run_scheduler() -> None:
         if now.date() != today_date:
             today_date = now.date()
             supervisor_fired_today = False
+            broker_fired_today = False
             logger.info(f"[Scheduler] Hari baru: {today_date}")
 
         if _is_weekday():
@@ -593,6 +722,14 @@ def run_scheduler() -> None:
             ):
                 supervisor_fired_today = True
                 _run_thread(run_supervisor_closing, "supervisor")
+
+            # ── Broker Flow (post-close 17:00) ───────────────────────────────
+            if (
+                not broker_fired_today
+                and now.hour == 17 and now.minute < 5
+            ):
+                broker_fired_today = True
+                _run_thread(run_broker_summary, "broker")
 
         time.sleep(30)  # Cek setiap 30 detik
 

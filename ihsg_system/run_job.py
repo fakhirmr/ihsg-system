@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("JobRunner")
 
-VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket", "sentiment", "fundamental_weekly", "supervisor"]
+VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket", "sentiment", "fundamental_weekly", "supervisor", "broker_summary"]
 
 
 def main() -> None:
@@ -41,26 +41,26 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Import scheduler functions
-    from scheduler import (
-        run_macro, run_premarket,
-        run_full_scan, run_quick_scan, run_aftermarket,
-        run_sentiment_scan, run_fundamental_weekly, run_supervisor_closing,
-    )
+    import scheduler as _sched
 
-    job_map = {
-        "macro":               run_macro,
-        "premarket":           run_premarket,
-        "full_scan":           run_full_scan,
-        "quick_scan":          run_quick_scan,
-        "aftermarket":         run_aftermarket,
-        "sentiment":           run_sentiment_scan,
-        "fundamental_weekly":  run_fundamental_weekly,
-        "supervisor":          run_supervisor_closing,
-    }
+    fn_name = {
+        "macro":               "run_macro",
+        "premarket":           "run_premarket",
+        "full_scan":           "run_full_scan",
+        "quick_scan":          "run_quick_scan",
+        "aftermarket":         "run_aftermarket",
+        "sentiment":           "run_sentiment_scan",
+        "fundamental_weekly":  "run_fundamental_weekly",
+        "supervisor":          "run_supervisor_closing",
+        "broker_summary":      "run_broker_summary",
+    }[args.job]
+
+    fn = getattr(_sched, fn_name, None)
+    if fn is None:
+        raise NotImplementedError(f"Fungsi '{fn_name}' belum ada di scheduler.py")
 
     logger.info(f"Menjalankan job: {args.job}")
-    job_map[args.job]()
+    fn()
     logger.info(f"Job selesai: {args.job}")
 
 
