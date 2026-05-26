@@ -152,33 +152,27 @@ def run_technical_volume() -> None:
 
     logger.info(f"[Technical+Volume] {ts} -> {len(buy_alerts)} BUY | {len(sell_alerts)} SELL")
 
-    if not buy_alerts and not sell_alerts:
+    if not buy_alerts:
         return  # Tidak ada sinyal kuat, tidak kirim notifikasi
 
-    NL = "\n"
-    msg = f"<b>Technical Scan — {ts}</b>\n\n"
-
-    if buy_alerts:
-        buy_alerts.sort(key=lambda x: x["score"], reverse=True)
-        lines = []
-        for r in buy_alerts[:8]:
-            tag = " BREAKOUT" if r["breakout"] else ""
-            vol_tag = f" Vol:{r['vol']:.1f}x" if r["vol"] >= 1.5 else ""
-            lines.append(
-                f"  <b>{r['ticker']}</b> {r['price']:,.0f} ({r['change']:+.1f}%){tag}{vol_tag}\n"
-                f"  Entry:{r['entry']:,.0f} TP1:{r['tp1']:,.0f} SL:{r['sl']:,.0f}"
-            )
-        msg += f"<b>BUY Signal ({len(buy_alerts)}):</b>\n" + NL.join(lines) + "\n\n"
-
-    if sell_alerts:
-        sell_alerts.sort(key=lambda x: x["score"])
-        lines = [
-            f"  <b>{r['ticker']}</b> {r['price']:,.0f} ({r['change']:+.1f}%) RSI:{r['rsi']:.0f}"
-            for r in sell_alerts[:5]
-        ]
-        msg += f"<b>SELL/Hindari ({len(sell_alerts)}):</b>\n" + NL.join(lines)
-
-    send_alert_chunked(msg)
+    # Kirim pesan secara individual untuk setiap saham yang terdeteksi
+    buy_alerts.sort(key=lambda x: x["score"], reverse=True)
+    
+    for r in buy_alerts:
+        tag = " 🔥 BREAKOUT" if r["breakout"] else ""
+        vol_tag = f" 🌊 Vol:{r['vol']:.1f}x" if r["vol"] >= 1.5 else ""
+        
+        msg = (
+            f"🚨 <b>Technical & Volume Alert</b>\n"
+            f"<i>{ts}</i>\n\n"
+            f"🎯 <b>{r['ticker']}</b> | Harga: <b>{r['price']:,.0f}</b> ({r['change']:+.1f}%)\n"
+            f"    Skor: {r['score']:+d} | RSI: {r['rsi']:.0f}{tag}{vol_tag}\n\n"
+            f"    Entry: {r['entry']:,.0f}\n"
+            f"    TP1: {r['tp1']:,.0f}\n"
+            f"    SL: {r['sl']:,.0f}\n\n"
+            f"<i>*Sinyal auto-generated dari Technical/Volume scan</i>"
+        )
+        send_alert_chunked(msg)
 
 
 # ── 2. NEWS SENTIMENT — setiap 1 jam ──────────────────────────────────────────
@@ -189,8 +183,9 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
     Jika trigger_fundamental_review=True pada hasil, jalankan Fundamental Agent
     untuk ticker tersebut secara otomatis.
     """
-    if not _is_market_hours() and trigger_fundamental_for is None:
-        return
+    # Dihapus batasan _is_market_hours() agar sentimen bisa jalan 24/7
+    # if not _is_market_hours() and trigger_fundamental_for is None:
+    #     return
 
     from agents.news_sentiment_agent import NewsSentimentAgent
     from utils.data_fetcher import fetch_stock_data, fetch_news, fetch_market_news
@@ -209,6 +204,38 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
     market_news = fetch_market_news(max_items=8)
     if market_news:
         logger.info(f"[Sentiment] Market news fetched ({len(market_news)} chars)")
+        
+        # ── 1. Analisis Berita Makro / Market secara umum ──
+        try:
+            market_result = agent.analyze(
+                ticker="Makro & IHSG",
+                company_name="Indeks Harga Saham Gabungan",
+                sector="Market",
+                industry="Macro Economy",
+                news_text=market_news,
+                market_news_text="",
+            )
+            
+            sent_m = market_result.get("sentiment", "Neutral")
+            conf_m = market_result.get("confidence", 0)
+            cond_emoji = {"Bullish": "🟢", "Bearish": "🔴", "Neutral": "🟡"}.get(sent_m, "🟡")
+            
+            cat_lines = "\n".join(f"  + {c}" for c in market_result.get("catalysts", []))
+            rsk_lines = "\n".join(f"  ! {r}" for r in market_result.get("risks", []))
+            
+            market_msg = (
+                f"📰 <b>Market & Macro News Analysis</b>\n"
+                f"<i>{ts}</i>\n\n"
+                f"<b>Berita Terkini (Sumber):</b>\n{market_news}\n\n"
+                f"<b>Sentimen Pasar:</b> {cond_emoji} {sent_m} ({conf_m}%)\n\n"
+                f"<b>Analisis:</b>\n{market_result.get('summary', 'Tidak ada info')}\n\n"
+                f"<b>Katalis:</b>\n{cat_lines or '  (tidak ada)'}\n\n"
+                f"<b>Risiko:</b>\n{rsk_lines or '  (tidak ada)'}"
+            )
+            send_alert_chunked(market_msg)
+        except Exception as e:
+            logger.error(f"[Sentiment] Error analyzing market news: {e}")
+
     else:
         logger.info("[Sentiment] Tidak ada market news dari yfinance")
 
@@ -220,18 +247,29 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
 
             # Fetch berita spesifik per saham
             stock_news = fetch_news(ticker, max_items=5)
-
-            result = agent.analyze(
-                ticker=ticker,
-                company_name=sd.company_name,
-                sector=sd.sector,
-                industry=sd.industry,
-                current_price=sd.current_price,
-                day_change_pct=sd.day_change_pct,
-                news_text=stock_news,
-                market_news_text=market_news,
-                watchlist=DEFAULT_TICKERS,
-            )
+            
+            # Jika tidak ada berita, lewati pemanggilan LLM untuk hemat kuota API
+            if not stock_news:
+                result = {
+                    "sentiment": "Neutral",
+                    "confidence": 0,
+                    "summary": "Tidak ada berita spesifik.",
+                    "fundamental_impact": "Unknown",
+                    "trigger_fundamental_review": False,
+                    "affected_tickers": []
+                }
+            else:
+                result = agent.analyze(
+                    ticker=ticker,
+                    company_name=sd.company_name,
+                    sector=sd.sector,
+                    industry=sd.industry,
+                    current_price=sd.current_price,
+                    day_change_pct=sd.day_change_pct,
+                    news_text=stock_news,
+                    market_news_text=market_news,
+                    watchlist=DEFAULT_TICKERS,
+                )
 
             # Cache hasil sentimen
             cache_set(f"sentiment:{ticker}", result)
@@ -255,16 +293,18 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
             if sent == "Bearish" and conf >= 60:
                 bearish_alerts.append({
                     "ticker": ticker, "conf": conf,
-                    "summary": result.get("summary", "")[:80],
+                    "summary": result.get("summary", ""),
                     "fund_impact": fund_impact,
-                    "fund_reason": result.get("fundamental_reason", "")[:60],
+                    "fund_reason": result.get("fundamental_reason", "")[:100],
+                    "news": stock_news,
                 })
             elif sent == "Bullish" and conf >= 60:
                 bullish_alerts.append({
                     "ticker": ticker, "conf": conf,
-                    "summary": result.get("summary", "")[:80],
+                    "summary": result.get("summary", ""),
                     "fund_impact": fund_impact,
-                    "fund_reason": result.get("fundamental_reason", "")[:60],
+                    "fund_reason": result.get("fundamental_reason", "")[:100],
+                    "news": stock_news,
                 })
 
         except Exception as e:
@@ -282,16 +322,20 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
 
         if bullish_alerts:
             lines = [
-                f"  <b>{a['ticker']}</b> ({a['conf']}%) — {a['summary']}\n"
-                f"  Dampak Fundamental: {a['fund_impact']} | {a['fund_reason']}"
+                f"  <b>{a['ticker']}</b> (Bullish {a['conf']}%)\n"
+                f"  🗞️ <i>Sumber Berita:</i>\n{a['news'] if a['news'] else '    (Tidak ada tautan berita spesifik)'}\n"
+                f"  💡 <i>Analisis:</i> {a['summary']}\n"
+                f"  📊 <i>Dampak Fundamental:</i> {a['fund_impact']} | {a['fund_reason']}\n"
                 for a in bullish_alerts[:5]
             ]
             msg += f"<b>Bullish ({len(bullish_alerts)}):</b>\n" + NL.join(lines) + "\n\n"
 
         if bearish_alerts:
             lines = [
-                f"  <b>{a['ticker']}</b> ({a['conf']}%) — {a['summary']}\n"
-                f"  Dampak Fundamental: {a['fund_impact']} | {a['fund_reason']}"
+                f"  <b>{a['ticker']}</b> (Bearish {a['conf']}%)\n"
+                f"  🗞️ <i>Sumber Berita:</i>\n{a['news'] if a['news'] else '    (Tidak ada tautan berita spesifik)'}\n"
+                f"  💡 <i>Analisis:</i> {a['summary']}\n"
+                f"  📊 <i>Dampak Fundamental:</i> {a['fund_impact']} | {a['fund_reason']}\n"
                 for a in bearish_alerts[:5]
             ]
             msg += f"<b>Bearish ({len(bearish_alerts)}):</b>\n" + NL.join(lines)
@@ -629,7 +673,7 @@ def send_schedule_card() -> None:
         f"  Setiap 15 menit | 09:00-16:00 WIB\n"
         f"  Alert jika ada sinyal kuat (skor >=35)\n\n"
         f"<b>News Sentiment</b>\n"
-        f"  Setiap 1 jam | 09:00-16:00 WIB\n"
+        f"  Setiap 1 jam | 24/7 (Setiap Hari)\n"
         f"  Auto-trigger Fundamental jika ada berita signifikan\n\n"
         f"<b>Macro</b>\n"
         f"  Setiap hari | 08:00 WIB\n\n"
@@ -690,14 +734,6 @@ def run_scheduler() -> None:
                 last_technical = now
                 _run_thread(run_technical_volume, "tech-vol")
 
-            # ── Sentiment (1 jam, jam market) ────────────────────────────────
-            if (
-                _is_market_hours()
-                and (now - last_sentiment).total_seconds() >= SENTIMENT_INTERVAL_MIN * 60
-            ):
-                last_sentiment = now
-                _run_thread(run_sentiment_scan, "sentiment")
-
             # ── Macro (1x/hari jam 08:00) ─────────────────────────────────────
             if (
                 last_macro_date != now.date()
@@ -730,6 +766,11 @@ def run_scheduler() -> None:
             ):
                 broker_fired_today = True
                 _run_thread(run_broker_summary, "broker")
+
+        # ── Sentiment (1 jam, 24/7 setiap hari) ─────────────────────────────
+        if (now - last_sentiment).total_seconds() >= SENTIMENT_INTERVAL_MIN * 60:
+            last_sentiment = now
+            _run_thread(run_sentiment_scan, "sentiment")
 
         time.sleep(30)  # Cek setiap 30 detik
 

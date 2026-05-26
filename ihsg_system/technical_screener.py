@@ -181,84 +181,49 @@ def run_screen():
     # ── Ranking ──────────────────────────────────────────────────────────────
     results.sort(key=lambda x: x["score"], reverse=True)
 
-    buy_signals  = [r for r in results if r["score"] >= 30]
-    hold_signals = [r for r in results if 10 <= r["score"] < 30]
-    sell_signals = [r for r in results if r["score"] <= -20]
+    # Filter kriteria ketat (misal skor >= 35) untuk dipanggil
+    strong_buy_signals = [r for r in results if r["score"] >= 35]
+
+    if not strong_buy_signals:
+        print("\nTidak ada saham yang memenuhi kriteria kuat saat ini. Scan selesai.")
+        return results
 
     # ── Print ke konsol ───────────────────────────────────────────────────────
     print()
     print("=" * 60)
-    print(f"  HASIL: {len(buy_signals)} BUY | {len(hold_signals)} WATCH | {len(sell_signals)} AVOID")
+    print(f"  DITEMUKAN {len(strong_buy_signals)} SAHAM POTENSIAL (Skor >= 35)")
     print("=" * 60)
 
-    if buy_signals:
-        print("\n  LAYAK DI-CALL (BUY Signal):")
-        print(f"  {'#':<3} {'Ticker':<10} {'Score':>6} {'Harga':>10} {'Chg%':>7} {'RSI':>5} {'Vol':>5}  Alasan")
-        print("  " + "-" * 70)
-        for i, r in enumerate(buy_signals, 1):
-            reasons = " | ".join(r["signals"][:2])
-            print(
-                f"  {i:<3} {r['ticker']:<10} {r['score']:>+6} "
-                f"{r['price']:>10,.0f} {r['change_pct']:>+6.1f}% "
-                f"{r['rsi']:>5.0f} {r['rel_vol']:>4.1f}x  {reasons}"
-            )
+    for i, r in enumerate(strong_buy_signals, 1):
+        reasons = " | ".join(r["signals"][:3])
+        print(
+            f"  {i:<3} {r['ticker']:<10} {r['score']:>+6} "
+            f"{r['price']:>10,.0f} {r['change_pct']:>+6.1f}% "
+            f"{r['rsi']:>5.0f} {r['rel_vol']:>4.1f}x  {reasons}"
+        )
 
     # ── Format Telegram ───────────────────────────────────────────────────────
     ts = datetime.now().strftime("%d %b %Y %H:%M WIB")
-    NL = "\n"
-
-    # Top BUY
-    buy_lines = []
-    for i, r in enumerate(buy_signals[:15], 1):
-        tag = " BREAKOUT!" if r["breakout"] else ""
-        reasons = ", ".join(r["signals"][:2])
-        buy_lines.append(
-            f"  {i}. <b>{r['ticker']}</b> [{r['price']:,.0f}] "
-            f"{r['change_pct']:+.1f}% | Skor:{r['score']:+d}"
-            f"{tag}\n"
-            f"     {reasons}"
-        )
-
-    # Watch list
-    watch_lines = [
-        f"  {r['ticker']} [{r['price']:,.0f}] Skor:{r['score']:+d}"
-        for r in hold_signals[:8]
-    ]
-
-    # Avoid list
-    avoid_lines = [
-        f"  {r['ticker']} [{r['price']:,.0f}] Skor:{r['score']:+d}"
-        for r in sell_signals[:5]
-    ]
-
-    msg = (
-        f"<b>IHSG Technical Screen</b>\n"
-        f"<i>{ts} | {len(DEFAULT_TICKERS)} saham dianalisis</i>\n\n"
-        f"<b>Hasil: {len(buy_signals)} BUY | {len(hold_signals)} WATCH | {len(sell_signals)} AVOID</b>\n"
-        f"{'=' * 30}\n\n"
-    )
-
-    if buy_signals:
-        msg += f"<b>LAYAK DI-CALL (BUY Signal):</b>\n"
-        msg += NL.join(buy_lines)
-        msg += "\n\n"
-
-    if hold_signals:
-        msg += f"<b>WATCH LIST:</b>\n"
-        msg += NL.join(watch_lines)
-        msg += "\n\n"
-
-    if sell_signals:
-        msg += f"<b>HINDARI (Teknikal Lemah):</b>\n"
-        msg += NL.join(avoid_lines)
-        msg += "\n"
-
-    msg += f"\n<i>Skor teknikal murni — tanpa LLM</i>"
-
+    
     print()
-    print("Mengirim laporan ke Telegram...")
-    ok = send_alert_chunked(msg)
-    print("Terkirim!" if ok else "Gagal kirim ke Telegram.")
+    print("Mengirim alert individual ke Telegram...")
+
+    for r in strong_buy_signals:
+        tag = " 🔥 BREAKOUT!" if r["breakout"] else ""
+        vol_tag = f" 🌊 Vol Spike {r['rel_vol']:.1f}x" if r['rel_vol'] >= 1.5 else ""
+        reasons = "\n    ✅ ".join([""] + r["signals"][:3])
+        
+        msg = (
+            f"🚨 <b>Technical & Volume Alert</b>\n"
+            f"<i>{ts}</i>\n\n"
+            f"🎯 <b>{r['ticker']}</b> | Harga: <b>{r['price']:,.0f}</b> ({r['change_pct']:+.1f}%)\n"
+            f"    Skor: {r['score']:+d} | RSI: {r['rsi']:.0f}{tag}{vol_tag}"
+            f"{reasons}\n\n"
+            f"<i>*Sinyal auto-generated dari Technical Screener</i>"
+        )
+        ok = send_alert_chunked(msg)
+        print(f"[{r['ticker']}] Terkirim!" if ok else f"[{r['ticker']}] Gagal kirim.")
+    
     return results
 
 
