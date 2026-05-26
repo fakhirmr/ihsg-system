@@ -23,13 +23,22 @@ Tugasmu mengevaluasi sentimen berita dan dampaknya terhadap saham & fundamental.
 Kembalikan HANYA JSON valid tanpa teks tambahan, tanpa markdown, tanpa komentar.
 Format JSON wajib:
 {
+  "analyzed_news": [
+    {
+      "title": "<judul asli>",
+      "publisher": "<sumber asli>",
+      "link": "<link berita>",
+      "news_summary": "<ringkasan berita>",
+      "analysis": "<analisis sentimen khusus berita ini>"
+    }
+  ],
   "sentiment": "<Bullish|Neutral|Bearish>",
   "confidence": <integer 0-100>,
   "catalysts": ["<katalis positif 1>"],
   "risks": ["<risiko/berita negatif 1>"],
   "corporate_actions": ["<rights issue|buyback|merger|dividen|dll> jika ada"],
-  "reasons": ["<alasan sentimen 1>", "<alasan sentimen 2>"],
-  "summary": "<ringkasan sentimen dalam Bahasa Indonesia>",
+  "reasons": ["<alasan sentimen keseluruhan 1>", "<alasan sentimen keseluruhan 2>"],
+  "summary": "<ringkasan sentimen keseluruhan dalam Bahasa Indonesia>",
   "fundamental_impact": "<Positive|Neutral|Negative|Unknown>",
   "fundamental_reason": "<alasan dampak terhadap fundamental: revenue, margin, utang, dll>",
   "trigger_fundamental_review": <true|false>,
@@ -106,6 +115,7 @@ class NewsSentimentAgent(BaseAgent):
         watchlist: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         fallback = {
+            "analyzed_news": [],
             "sentiment": "Neutral",
             "confidence": 40,
             "catalysts": [],
@@ -119,9 +129,16 @@ class NewsSentimentAgent(BaseAgent):
             "affected_tickers": [],
         }
 
+        import json
         # Build news section per saham
-        if news_text and news_text.strip():
-            news_section = f"=== BERITA SAHAM {ticker} ===\n{news_text.strip()}"
+        news_section_text = ""
+        if isinstance(news_text, list):
+            news_section_text = json.dumps(news_text, indent=2, ensure_ascii=False)
+        elif news_text and isinstance(news_text, str):
+            news_section_text = news_text.strip()
+            
+        if news_section_text:
+            news_section = f"=== BERITA SAHAM {ticker} ===\n{news_section_text}"
         else:
             news_section = (
                 f"=== BERITA SAHAM {ticker} ===\n"
@@ -129,8 +146,14 @@ class NewsSentimentAgent(BaseAgent):
             )
 
         # Build market-wide news section (MSCI, BI Rate, Fed, dll)
-        if market_news_text and market_news_text.strip():
-            market_news_section = f"=== BERITA PASAR / EVENT BESAR (IHSG) ===\n{market_news_text.strip()}"
+        market_section_text = ""
+        if isinstance(market_news_text, list):
+            market_section_text = json.dumps(market_news_text, indent=2, ensure_ascii=False)
+        elif market_news_text and isinstance(market_news_text, str):
+            market_section_text = market_news_text.strip()
+            
+        if market_section_text:
+            market_news_section = f"=== BERITA PASAR / EVENT BESAR (IHSG) ===\n{market_section_text}"
         else:
             market_news_section = ""
 

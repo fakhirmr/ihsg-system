@@ -223,12 +223,25 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
             cat_lines = "\n".join(f"  + {c}" for c in market_result.get("catalysts", []))
             rsk_lines = "\n".join(f"  ! {r}" for r in market_result.get("risks", []))
             
+            # Format market news
+            market_news_text_list = []
+            if market_result.get("analyzed_news"):
+                for n in market_result["analyzed_news"]:
+                    link_str = f"<a href='{n.get('link')}'>Link</a>" if n.get('link') else ""
+                    market_news_text_list.append(f"📰 <b>\"{n.get('title')}\"</b> - {n.get('publisher')} - {link_str}\n<i>\"{n.get('news_summary')}\"</i>\n💬 \"{n.get('analysis')}\"")
+            else:
+                for n in market_news:
+                    link_str = f"<a href='{n.get('link')}'>Link</a>" if n.get('link') else ""
+                    market_news_text_list.append(f"📰 <b>\"{n.get('title')}\"</b> - {n.get('publisher')} - {link_str}\n<i>\"{n.get('summary')}\"</i>")
+            
+            market_news_str = "\n\n".join(market_news_text_list)
+
             market_msg = (
                 f"📰 <b>Market & Macro News Analysis</b>\n"
                 f"<i>{ts}</i>\n\n"
-                f"<b>Berita Terkini (Sumber):</b>\n{market_news}\n\n"
+                f"<b>Berita Terkini & Analisis:</b>\n{market_news_str}\n\n"
                 f"<b>Sentimen Pasar:</b> {cond_emoji} {sent_m} ({conf_m}%)\n\n"
-                f"<b>Analisis:</b>\n{market_result.get('summary', 'Tidak ada info')}\n\n"
+                f"<b>Kesimpulan:</b>\n{market_result.get('summary', 'Tidak ada info')}\n\n"
                 f"<b>Katalis:</b>\n{cat_lines or '  (tidak ada)'}\n\n"
                 f"<b>Risiko:</b>\n{rsk_lines or '  (tidak ada)'}"
             )
@@ -296,7 +309,7 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                     "summary": result.get("summary", ""),
                     "fund_impact": fund_impact,
                     "fund_reason": result.get("fundamental_reason", "")[:100],
-                    "news": stock_news,
+                    "analyzed_news": result.get("analyzed_news", []),
                 })
             elif sent == "Bullish" and conf >= 60:
                 bullish_alerts.append({
@@ -304,7 +317,7 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                     "summary": result.get("summary", ""),
                     "fund_impact": fund_impact,
                     "fund_reason": result.get("fundamental_reason", "")[:100],
-                    "news": stock_news,
+                    "analyzed_news": result.get("analyzed_news", []),
                 })
 
         except Exception as e:
@@ -320,25 +333,27 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
         NL = "\n"
         msg = f"<b>Sentiment Scan — {ts}</b>\n\n"
 
+        def _format_alert(a: dict, label: str) -> str:
+            out = f"<b>{a['ticker']}</b> ({label} {a['conf']}%)\n"
+            out += f"📊 <i>Dampak Fundamental:</i> {a['fund_impact']} | {a['fund_reason']}\n\n"
+            if a.get("analyzed_news"):
+                for n in a["analyzed_news"]:
+                    link_str = f"<a href='{n.get('link')}'>Link</a>" if n.get('link') else ""
+                    out += f"📰 <b>\"{n.get('title')}\"</b> - {n.get('publisher')} - {link_str}\n"
+                    out += f"<i>\"{n.get('news_summary')}\"</i>\n"
+                    out += f"💬 \"{n.get('analysis')}\"\n\n"
+            else:
+                out += "(Tidak ada detail berita spesifik)\n\n"
+            out += f"💡 <i>Kesimpulan Sentimen:</i> {a['summary']}\n"
+            return out
+
         if bullish_alerts:
-            lines = [
-                f"  <b>{a['ticker']}</b> (Bullish {a['conf']}%)\n"
-                f"  🗞️ <i>Sumber Berita:</i>\n{a['news'] if a['news'] else '    (Tidak ada tautan berita spesifik)'}\n"
-                f"  💡 <i>Analisis:</i> {a['summary']}\n"
-                f"  📊 <i>Dampak Fundamental:</i> {a['fund_impact']} | {a['fund_reason']}\n"
-                for a in bullish_alerts[:5]
-            ]
-            msg += f"<b>Bullish ({len(bullish_alerts)}):</b>\n" + NL.join(lines) + "\n\n"
+            lines = [_format_alert(a, "Bullish") for a in bullish_alerts[:5]]
+            msg += f"<b>Bullish ({len(bullish_alerts)}):</b>\n\n" + ("—" * 20 + "\n").join(lines) + "\n\n"
 
         if bearish_alerts:
-            lines = [
-                f"  <b>{a['ticker']}</b> (Bearish {a['conf']}%)\n"
-                f"  🗞️ <i>Sumber Berita:</i>\n{a['news'] if a['news'] else '    (Tidak ada tautan berita spesifik)'}\n"
-                f"  💡 <i>Analisis:</i> {a['summary']}\n"
-                f"  📊 <i>Dampak Fundamental:</i> {a['fund_impact']} | {a['fund_reason']}\n"
-                for a in bearish_alerts[:5]
-            ]
-            msg += f"<b>Bearish ({len(bearish_alerts)}):</b>\n" + NL.join(lines)
+            lines = [_format_alert(a, "Bearish") for a in bearish_alerts[:5]]
+            msg += f"<b>Bearish ({len(bearish_alerts)}):</b>\n\n" + ("—" * 20 + "\n").join(lines)
 
         send_alert_chunked(msg)
 

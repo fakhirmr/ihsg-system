@@ -52,20 +52,19 @@ class StockData:
     is_valid: bool = False
 
 
-def fetch_news(ticker: str, max_items: int = 5) -> str:
+def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
     """
     Ambil berita terkini dari Yahoo Finance untuk satu ticker.
-    Mengembalikan string ringkasan headline, atau string kosong jika tidak ada.
+    Mengembalikan list of dictionaries berisi detail berita.
     """
     try:
         stock = yf.Ticker(ticker)
         news_items = stock.news or []
         if not news_items:
-            return ""
+            return []
 
-        lines = []
+        results = []
         for item in news_items[:max_items]:
-            # yfinance news format bervariasi antar versi
             content = item.get("content", item)
             title = (
                 content.get("title")
@@ -77,28 +76,45 @@ def fetch_news(ticker: str, max_items: int = 5) -> str:
                 or item.get("publisher")
                 or ""
             )
+            link = (
+                item.get("link")
+                or content.get("clickThroughUrl", {}).get("url")
+                or content.get("url")
+                or ""
+            )
+            summary = (
+                content.get("summary")
+                or item.get("summary")
+                or ""
+            ).strip()
+            
             if title:
-                lines.append(f"- {title}" + (f" [{publisher}]" if publisher else ""))
+                results.append({
+                    "title": title,
+                    "publisher": publisher,
+                    "link": link,
+                    "summary": summary
+                })
 
-        return "\n".join(lines)
+        return results
     except Exception as exc:
         logger.debug(f"[fetch_news] {ticker}: {exc}")
-        return ""
+        return []
 
 
-def fetch_market_news(max_items: int = 8) -> str:
+def fetch_market_news(max_items: int = 8) -> list[dict[str, str]]:
     """
     Ambil berita market-wide IHSG dari Yahoo Finance (^JKSE + IDR=X).
     Digunakan untuk mendeteksi event besar: MSCI, BI Rate, Fed, dll.
     """
-    combined: list[str] = []
+    combined = []
     for source_ticker in ["^JKSE", "IDR=X", "EIDO"]:
-        text = fetch_news(source_ticker, max_items=max_items)
-        if text:
-            combined.append(text)
-        if len(combined) >= 2:
+        news_list = fetch_news(source_ticker, max_items=max_items)
+        if news_list:
+            combined.extend(news_list)
+        if len(combined) >= max_items:
             break
-    return "\n".join(combined)
+    return combined[:max_items]
 
 
 def fetch_stock_data(ticker: str, period: str = "3mo") -> StockData:
