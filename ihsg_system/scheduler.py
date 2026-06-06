@@ -242,9 +242,7 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
     macro_sent_today = cache_exists("macro:daily", ttl=24 * 3600)
     market_news      = fetch_market_news(max_items=8)
 
-    if not _is_weekday():
-        logger.info("[Sentiment] Weekend — market news dilewati")
-    elif not notif_ok:
+    if not notif_ok:
         logger.info("[Sentiment] Luar jam notifikasi — market news dilewati")
     elif macro_sent_today:
         logger.info("[Sentiment] Macro sudah dikirim hari ini — market news dilewati")
@@ -721,6 +719,14 @@ def run_scheduler() -> None:
             supervisor_fired_today = False
             logger.info(f"[Scheduler] Hari baru: {today_date}")
 
+        # ── Macro (1x/hari jam 08:00, termasuk weekend) ──────────────────────
+        if (
+            last_macro_date != now.date()
+            and now.hour == 8 and now.minute < 5
+        ):
+            last_macro_date = now.date()
+            _run_thread(run_macro, "macro")
+
         if _is_weekday():
             # ── Technical + Volume (15 menit, jam market) ────────────────────
             if (
@@ -729,14 +735,6 @@ def run_scheduler() -> None:
             ):
                 last_technical = now
                 _run_thread(run_technical_volume, "tech-vol")
-
-            # ── Macro (1x/hari jam 08:00) ─────────────────────────────────────
-            if (
-                last_macro_date != now.date()
-                and now.hour == 8 and now.minute < 5
-            ):
-                last_macro_date = now.date()
-                _run_thread(run_macro, "macro")
 
             # ── Fundamental (1x/minggu Senin 07:30) ──────────────────────────
             if (
