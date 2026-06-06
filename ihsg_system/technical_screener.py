@@ -151,6 +151,7 @@ def score_ticker(ticker: str) -> dict[str, Any] | None:
             "signals": signals[:4],   # top 4 reasons
             "warnings": warnings[:2],
             "r1": td.resistance_1,
+            "r2": td.resistance_2,
             "s1": td.support_1,
             "atr": td.atr_14,
         }
@@ -209,16 +210,25 @@ def run_screen():
     print("Mengirim alert individual ke Telegram...")
 
     for r in strong_buy_signals:
-        tag = " 🔥 BREAKOUT!" if r["breakout"] else ""
-        vol_tag = f" 🌊 Vol Spike {r['rel_vol']:.1f}x" if r['rel_vol'] >= 1.5 else ""
+        entry = r["price"]
+        tp1   = round(r["r1"] if r["r1"] > entry else entry * 1.04, 0)
+        tp2   = round(r["r2"] if r["r2"] > tp1   else entry * 1.08, 0)
+        sl    = round(max(r["s1"], entry * 0.95) if r["s1"] > 0 else entry * 0.95, 0)
+
+        tag     = " 🔥 BREAKOUT!" if r["breakout"] else ""
+        vol_tag = f" 🌊 Vol Spike {r['rel_vol']:.1f}x" if r["rel_vol"] >= 1.5 else ""
         reasons = "\n    ✅ ".join([""] + r["signals"][:3])
-        
+
         msg = (
             f"🚨 <b>Technical & Volume Alert</b>\n"
             f"<i>{ts}</i>\n\n"
             f"🎯 <b>{r['ticker']}</b> | Harga: <b>{r['price']:,.0f}</b> ({r['change_pct']:+.1f}%)\n"
             f"    Skor: {r['score']:+d} | RSI: {r['rsi']:.0f}{tag}{vol_tag}"
             f"{reasons}\n\n"
+            f"    Entry : <b>{entry:,.0f}</b>\n"
+            f"    TP1   : <b>{tp1:,.0f}</b>\n"
+            f"    TP2   : <b>{tp2:,.0f}</b>\n"
+            f"    SL    : <b>{sl:,.0f}</b>\n\n"
             f"<i>*Sinyal auto-generated dari Technical Screener</i>"
         )
         ok = send_alert_chunked(msg)
