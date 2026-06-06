@@ -719,15 +719,15 @@ def run_scheduler() -> None:
             supervisor_fired_today = False
             logger.info(f"[Scheduler] Hari baru: {today_date}")
 
-        # ── Macro (1x/hari jam 08:00, termasuk weekend) ──────────────────────
-        if (
-            last_macro_date != now.date()
-            and now.hour == 8 and now.minute < 5
-        ):
-            last_macro_date = now.date()
-            _run_thread(run_macro, "macro")
-
         if _is_weekday():
+            # ── Macro (1x/hari jam 08:00) ─────────────────────────────────────
+            if (
+                last_macro_date != now.date()
+                and now.hour == 8 and now.minute < 5
+            ):
+                last_macro_date = now.date()
+                _run_thread(run_macro, "macro")
+
             # ── Technical + Volume (15 menit, jam market) ────────────────────
             if (
                 _is_market_hours()
