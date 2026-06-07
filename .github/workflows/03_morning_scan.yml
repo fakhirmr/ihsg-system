@@ -2,21 +2,30 @@ name: "09:15 - Morning Scan (Full)"
 
 on:
   schedule:
-    # 09:15 WIB = 02:15 UTC
     - cron: "15 2 * * 1-5"
   workflow_dispatch:
 
 jobs:
   morning-scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90      # Full scan bisa lama
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore agent cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}
+          restore-keys: |
+            agent-dedup-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
       - run: pip install -r ihsg_system/requirements.txt
+
       - name: Run Full Scan
         working-directory: ihsg_system
         env:
@@ -26,3 +35,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LLM_PROVIDER: auto
         run: python run_job.py --job full_scan
+
+      - name: Save agent cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}

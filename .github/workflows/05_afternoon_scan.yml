@@ -2,7 +2,6 @@ name: "14:30 - Afternoon Scan"
 
 on:
   schedule:
-    # 14:30 WIB = 07:30 UTC
     - cron: "30 7 * * 1-5"
   workflow_dispatch:
 
@@ -12,11 +11,21 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore agent cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}
+          restore-keys: |
+            agent-dedup-
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
       - run: pip install -r ihsg_system/requirements.txt
+
       - name: Run Quick Scan
         working-directory: ihsg_system
         env:
@@ -26,3 +35,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LLM_PROVIDER: auto
         run: python run_job.py --job quick_scan
+
+      - name: Save agent cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}

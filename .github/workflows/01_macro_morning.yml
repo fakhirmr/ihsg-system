@@ -2,25 +2,28 @@ name: "08:00 - Macro Morning"
 
 on:
   schedule:
-    # 08:00 WIB = 01:00 UTC (WIB = UTC+7)
-    - cron: "0 1 * * 1-5"   # Senin-Jumat
-  workflow_dispatch:          # Bisa trigger manual dari GitHub
+    - cron: "0 1 * * 1-5"
+  workflow_dispatch:
 
 jobs:
   macro-morning:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Restore agent cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}
+          restore-keys: |
+            agent-dedup-
+
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -r ihsg_system/requirements.txt
+      - run: pip install -r ihsg_system/requirements.txt
 
       - name: Run Macro Agent
         working-directory: ihsg_system
@@ -31,3 +34,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           LLM_PROVIDER: auto
         run: python run_job.py --job macro
+
+      - name: Save agent cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: ihsg_system/data/agent_cache.json
+          key: agent-dedup-${{ github.run_id }}
