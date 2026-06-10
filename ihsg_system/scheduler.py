@@ -536,7 +536,6 @@ def run_fundamental_targeted(tickers: list[str]) -> None:
     agent = FundamentalAgent()
     NL = "\n"
     results_lines = []
-    ts = _now().strftime("%H:%M WIB")
 
     for ticker in tickers:
         try:
@@ -568,12 +567,10 @@ def run_fundamental_targeted(tickers: list[str]) -> None:
             logger.error(f"[Fundamental-Targeted] {ticker}: {e}")
 
     if results_lines:
-        msg = (
-            f"<b>Fundamental Review (Dipicu Sentimen) — {ts}</b>\n"
-            f"<i>Saham: {', '.join(t.replace('.JK','') for t in tickers)}</i>\n\n"
-            + NL.join(results_lines)
+        logger.info(
+            f"[Fundamental-Targeted] Selesai: {', '.join(t.replace('.JK','') for t in tickers)}\n"
+            + NL.join(r.replace('<b>','').replace('</b>','').replace('<i>','').replace('</i>','') for r in results_lines)
         )
-        send_alert_chunked(msg)
 
 
 # ── 4. MACRO — 1x sehari ──────────────────────────────────────────────────────

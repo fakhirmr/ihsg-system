@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("JobRunner")
 
-VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket", "sentiment", "fundamental_weekly", "supervisor", "broker_summary"]
+VALID_JOBS = ["macro", "premarket", "full_scan", "quick_scan", "aftermarket", "sentiment", "fundamental_weekly", "supervisor"]
 
 
 def main() -> None:
@@ -52,7 +52,6 @@ def main() -> None:
         "sentiment":           "run_sentiment_scan",
         "fundamental_weekly":  "run_fundamental_weekly",
         "supervisor":          "run_supervisor_closing",
-        "broker_summary":      "run_broker_summary",
     }[args.job]
 
     fn = getattr(_sched, fn_name, None)
