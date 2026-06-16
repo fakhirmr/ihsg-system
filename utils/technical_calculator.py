@@ -52,6 +52,7 @@ class TechnicalData:
     # Patterns
     is_breakout: bool = False
     is_breakdown: bool = False
+    is_consolidation_breakout: bool = False  # breakout setelah ATR rendah (konsolidasi)
     higher_high: bool = False
     lower_low: bool = False
 
@@ -222,6 +223,19 @@ def calculate_technical_data(ticker: str, hist: pd.DataFrame) -> TechnicalData:
     # Breakout / Breakdown
     td.is_breakout, td.is_breakdown = _detect_breakout(closes)
 
+    # Consolidation Breakout: breakout + ATR sebelumnya rendah (harga diam lalu meledak)
+    if td.is_breakout and len(hist) >= 30:
+        _h  = hist["High"]
+        _lo = hist["Low"]
+        _pc = hist["Close"].shift(1)
+        _tr = pd.concat(
+            [_h - _lo, (_h - _pc).abs(), (_lo - _pc).abs()], axis=1
+        ).max(axis=1)
+        _atr5      = _tr.rolling(5).mean()
+        _atr5_mean = _atr5.rolling(20).mean()
+        if pd.notna(_atr5.iloc[-2]) and pd.notna(_atr5_mean.iloc[-2]) and float(_atr5_mean.iloc[-2]) > 0:
+            td.is_consolidation_breakout = float(_atr5.iloc[-2]) < float(_atr5_mean.iloc[-2]) * 0.7
+
     # Higher High / Lower Low (last 3 bars)
     if len(closes) >= 3:
         c = closes.iloc
@@ -230,7 +244,7 @@ def calculate_technical_data(ticker: str, hist: pd.DataFrame) -> TechnicalData:
 
     logger.debug(
         f"[{ticker}] TechData — RSI:{td.rsi_14:.1f} | MACD:{td.macd_histogram:+.2f} "
-        f"| Trend:{td.trend} | Breakout:{td.is_breakout}"
+        f"| Trend:{td.trend} | Breakout:{td.is_breakout} | ConsolBrk:{td.is_consolidation_breakout}"
     )
 
     return td
