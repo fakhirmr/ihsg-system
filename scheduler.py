@@ -147,11 +147,12 @@ def run_technical_volume() -> None:
             tp2   = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
             sl    = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
 
-            # ── Kondisi 1: CONSOL BREAKOUT (winrate ~60%) ─────────────────
-            # Breakout dari konsolidasi + MACD positif + volume kuat
+            # ── Kondisi 1: CONSOL BREAKOUT (winrate ~58%) ─────────────────
+            # Breakout dari konsolidasi + MACD line & histogram positif + volume kuat
             if (
                 td.is_consolidation_breakout
-                and td.macd_histogram > 0
+                and td.macd_line > 0        # MACD line di atas zero
+                and td.macd_histogram > 0   # histogram juga positif
                 and sd.relative_volume >= 1.5
             ):
                 key = f"tech_breakout:{ticker}:{today}"
