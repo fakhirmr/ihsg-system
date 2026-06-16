@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Secrets — JANGAN pernah di-commit
+.env
+
+# Data & logs (lokal saja)
+data/agent_cache.json
+data/signal_history.json
+logs/*.log
+reports/*.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

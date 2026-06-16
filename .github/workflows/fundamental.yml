@@ -1,0 +1,31 @@
+name: Fundamental Weekly (Senin 07:30 WIB)
+
+on:
+  schedule:
+    - cron: '30 0 * * 1'    # 07:30 WIB = 00:30 UTC, Senin saja
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Fundamental Weekly
+        env:
+          LLM_PROVIDER:        ${{ secrets.LLM_PROVIDER }}
+          GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN:  ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python run_job.py --job fundamental_weekly
