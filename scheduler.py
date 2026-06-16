@@ -118,7 +118,12 @@ def run_technical_volume() -> None:
     from utils.technical_calculator import calculate_technical_data
 
     ts = _now().strftime("%H:%M WIB")
+    today = _now().strftime("%Y-%m-%d")
     logger.info(f"[Technical+Volume] Scan dimulai — {ts}")
+
+    # TTL dedup: breakout 4 jam, sinyal biasa 2 jam
+    TTL_BREAKOUT_DEDUP = 4 * 3600
+    TTL_SIGNAL_DEDUP   = 2 * 3600
 
     buy_alerts, sell_alerts = [], []
 
@@ -153,11 +158,25 @@ def run_technical_volume() -> None:
             sl    = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
 
             if score >= 35:
+                is_breakout = td.is_breakout and score >= 60
+
+                # Cek dedup: sudah dikirim dalam window waktu tertentu?
+                dedup_key = (
+                    f"tech_breakout:{ticker}:{today}"
+                    if is_breakout else
+                    f"tech_signal:{ticker}:{today}"
+                )
+                ttl = TTL_BREAKOUT_DEDUP if is_breakout else TTL_SIGNAL_DEDUP
+                if cache_exists(dedup_key, ttl=ttl):
+                    logger.debug(f"[Tech] {ticker} — skip (sudah dikirim, dedup aktif)")
+                    continue
+
                 buy_alerts.append({
                     "ticker": ticker, "score": score, "price": p,
                     "change": sd.day_change_pct, "rsi": td.rsi_14,
                     "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
-                    "breakout": td.is_breakout, "vol": sd.relative_volume,
+                    "breakout": is_breakout, "vol": sd.relative_volume,
+                    "dedup_key": dedup_key,
                 })
             elif score <= -35:
                 sell_alerts.append({
@@ -167,19 +186,18 @@ def run_technical_volume() -> None:
         except Exception as e:
             logger.debug(f"[Tech] {ticker}: {e}")
 
-    logger.info(f"[Technical+Volume] {ts} -> {len(buy_alerts)} BUY | {len(sell_alerts)} SELL")
+    logger.info(f"[Technical+Volume] {ts} -> {len(buy_alerts)} BUY baru | {len(sell_alerts)} SELL")
 
     if not buy_alerts:
-        return  # Tidak ada sinyal kuat, tidak kirim notifikasi
+        return  # Semua sudah dikirim atau tidak ada sinyal kuat
 
     buy_alerts.sort(key=lambda x: x["score"], reverse=True)
 
     # ── Anti-Spam: Digest Mode ────────────────────────────────────────────────
-    # Pisahkan BREAKOUT kuat (skor ≥ 60) dari sinyal biasa
-    strong_breakouts = [r for r in buy_alerts if r["breakout"] and r["score"] >= 60]
-    regular_signals  = [r for r in buy_alerts if not (r["breakout"] and r["score"] >= 60)]
+    strong_breakouts = [r for r in buy_alerts if r["breakout"]]
+    regular_signals  = [r for r in buy_alerts if not r["breakout"]]
 
-    # Kirim BREAKOUT kuat sebagai pesan individual (prioritas tinggi)
+    # Kirim BREAKOUT kuat sebagai pesan individual — lalu mark dedup
     for r in strong_breakouts:
         vol_tag = f" 🌊 Vol:{r['vol']:.1f}x" if r["vol"] >= 1.5 else ""
         msg = (
@@ -192,27 +210,29 @@ def run_technical_volume() -> None:
             f"    SL  : {r['sl']:,.0f}\n\n"
             f"<i>*Sinyal Breakout kuat — auto-generated</i>"
         )
-        send_alert_chunked(msg)
+        if send_alert_chunked(msg):
+            cache_mark(r["dedup_key"])
 
-    # Kirim sinyal biasa sebagai 1 pesan digest ringkas
+    # Kirim sinyal biasa sebagai 1 pesan digest ringkas — lalu mark semua dedup
     if regular_signals:
         NL = "\n"
         lines = []
         for r in regular_signals[:8]:  # Maks 8 sinyal dalam 1 pesan
-            tag = " 🔥" if r["breakout"] else ""
             vol_tag = f" Vol:{r['vol']:.1f}x" if r["vol"] >= 1.5 else ""
             lines.append(
-                f"  <b>{r['ticker']}</b>{tag} — {r['price']:,.0f} ({r['change']:+.1f}%) "
+                f"  <b>{r['ticker']}</b> — {r['price']:,.0f} ({r['change']:+.1f}%) "
                 f"Skor:{r['score']:+d} RSI:{r['rsi']:.0f}{vol_tag}\n"
                 f"    Entry:{r['entry']:,.0f} | TP1:{r['tp1']:,.0f} | SL:{r['sl']:,.0f}"
             )
         digest_msg = (
-            f"🚨 <b>Technical & Volume Digest</b> — {ts}\n"
-            f"<i>{len(regular_signals)} sinyal BUY terdeteksi</i>\n\n"
+            f"🚨 <b>Technical &amp; Volume Digest</b> — {ts}\n"
+            f"<i>{len(regular_signals)} sinyal BUY baru terdeteksi</i>\n\n"
             + NL.join(lines)
             + f"\n\n<i>*Auto-generated dari Technical/Volume scan</i>"
         )
-        send_alert_chunked(digest_msg)
+        if send_alert_chunked(digest_msg):
+            for r in regular_signals[:8]:
+                cache_mark(r["dedup_key"])
 
 
 # ── 2. NEWS SENTIMENT — setiap 1 jam ──────────────────────────────────────────
@@ -620,7 +640,7 @@ def run_supervisor_closing() -> None:
 
     try:
         supervisor = SupervisorAI()
-        results = supervisor.screen(DEFAULT_TICKERS, send_alerts=True, min_confidence=0)
+        results = supervisor.screen(DEFAULT_TICKERS, send_alerts=False, min_confidence=0)
 
         buy  = [r for r in results if r.get("final_signal") == "BUY"]
         sell = [r for r in results if r.get("final_signal") == "SELL"]
