@@ -31,11 +31,13 @@ class TechnicalData:
     macd_line: float = 0.0
     macd_signal: float = 0.0
     macd_histogram: float = 0.0
+    macd_hist_rising: bool = False   # histogram bar ini > bar sebelumnya
 
     # Bollinger Bands
     bb_upper: float = 0.0
     bb_middle: float = 0.0
     bb_lower: float = 0.0
+    bb_pct: float = 0.5              # posisi harga di dalam BB (0=lower, 1=upper)
 
     # VWAP
     vwap: float = 0.0
@@ -55,6 +57,7 @@ class TechnicalData:
     is_consolidation_breakout: bool = False  # breakout setelah ATR rendah (konsolidasi)
     higher_high: bool = False
     lower_low: bool = False
+    down_days: int = 0               # jumlah hari turun berturut-turut
 
     # Computed from raw data
     atr_14: float = 0.0             # Average True Range (volatility)
@@ -80,16 +83,20 @@ def _rsi(closes: pd.Series, period: int = 14) -> float:
     return float(val) if pd.notna(val) else 50.0
 
 
-def _macd(closes: pd.Series) -> tuple[float, float, float]:
+def _macd(closes: pd.Series) -> tuple[float, float, float, float]:
+    """Returns (macd_line, signal, histogram_now, histogram_prev)."""
     ema12 = _ema(closes, 12)
     ema26 = _ema(closes, 26)
     line = ema12 - ema26
     signal = _ema(line, 9)
     hist = line - signal
+    curr = float(hist.iloc[-1]) if pd.notna(hist.iloc[-1]) else 0.0
+    prev = float(hist.iloc[-2]) if len(hist) >= 2 and pd.notna(hist.iloc[-2]) else curr
     return (
         float(line.iloc[-1]) if pd.notna(line.iloc[-1]) else 0.0,
         float(signal.iloc[-1]) if pd.notna(signal.iloc[-1]) else 0.0,
-        float(hist.iloc[-1]) if pd.notna(hist.iloc[-1]) else 0.0,
+        curr,
+        prev,
     )
 
 
@@ -203,10 +210,15 @@ def calculate_technical_data(ticker: str, hist: pd.DataFrame) -> TechnicalData:
 
     # Momentum
     td.rsi_14 = _rsi(closes)
-    td.macd_line, td.macd_signal, td.macd_histogram = _macd(closes)
+    td.macd_line, td.macd_signal, td.macd_histogram, _macd_prev = _macd(closes)
+    td.macd_hist_rising = td.macd_histogram > _macd_prev
 
     # Bollinger Bands
     td.bb_upper, td.bb_middle, td.bb_lower = _bollinger(closes)
+    if td.bb_upper > td.bb_lower:
+        td.bb_pct = (td.current_price - td.bb_lower) / (td.bb_upper - td.bb_lower)
+    else:
+        td.bb_pct = 0.5
 
     # VWAP
     td.vwap = _vwap(hist)
@@ -242,9 +254,17 @@ def calculate_technical_data(ticker: str, hist: pd.DataFrame) -> TechnicalData:
         td.higher_high = float(c[-1]) > float(c[-2]) > float(c[-3])
         td.lower_low = float(c[-1]) < float(c[-2]) < float(c[-3])
 
+    # Consecutive down days
+    vals = closes.values
+    for i in range(len(vals) - 1, 0, -1):
+        if float(vals[i]) < float(vals[i - 1]):
+            td.down_days += 1
+        else:
+            break
+
     logger.debug(
         f"[{ticker}] TechData — RSI:{td.rsi_14:.1f} | MACD:{td.macd_histogram:+.2f} "
-        f"| Trend:{td.trend} | Breakout:{td.is_breakout} | ConsolBrk:{td.is_consolidation_breakout}"
+        f"| Trend:{td.trend} | Breakout:{td.is_breakout} | DownDays:{td.down_days}"
     )
 
     return td

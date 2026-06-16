@@ -128,9 +128,11 @@ def run_technical_volume() -> None:
     today = _now().strftime("%Y-%m-%d")
     logger.info(f"[Technical+Volume] Scan dimulai — {ts}")
 
-    TTL_SIGNAL_DEDUP = 4 * 3600  # tidak kirim ticker sama dalam 4 jam
+    TTL_BREAKOUT_DEDUP = 4 * 3600   # tidak kirim breakout ticker sama dalam 4 jam
+    TTL_WEAKNESS_DEDUP = 24 * 3600  # tidak kirim weakness ticker sama dalam 1 hari
 
-    alerts = []
+    breakout_alerts  = []
+    weakness_alerts  = []
 
     for ticker in DEFAULT_TICKERS:
         try:
@@ -140,62 +142,83 @@ def run_technical_volume() -> None:
             td = calculate_technical_data(ticker, sd.price_history)
             p  = sd.current_price
 
-            # ── Kondisi BUY (dari backtest, winrate ~60%) ─────────────────
-            is_buy = (
-                td.is_consolidation_breakout   # breakout dari konsolidasi
-                and td.macd_histogram > 0      # momentum positif
-                and sd.relative_volume >= 1.5  # volume konfirmasi
-            )
-
-            if not is_buy:
-                continue
-
-            dedup_key = f"tech_signal:{ticker}:{today}"
-            if cache_exists(dedup_key, ttl=TTL_SIGNAL_DEDUP):
-                logger.debug(f"[Tech] {ticker} — skip dedup")
-                continue
-
             entry = p
             tp1   = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
             tp2   = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
             sl    = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
 
-            alerts.append({
-                "ticker":    ticker,
-                "price":     p,
-                "change":    sd.day_change_pct,
-                "rsi":       td.rsi_14,
-                "macd_h":    td.macd_histogram,
-                "vol":       sd.relative_volume,
-                "entry":     entry,
-                "tp1":       tp1,
-                "tp2":       tp2,
-                "sl":        sl,
-                "dedup_key": dedup_key,
-            })
+            # ── Kondisi 1: CONSOL BREAKOUT (winrate ~60%) ─────────────────
+            # Breakout dari konsolidasi + MACD positif + volume kuat
+            if (
+                td.is_consolidation_breakout
+                and td.macd_histogram > 0
+                and sd.relative_volume >= 1.5
+            ):
+                key = f"tech_breakout:{ticker}:{today}"
+                if not cache_exists(key, ttl=TTL_BREAKOUT_DEDUP):
+                    breakout_alerts.append({
+                        "ticker": ticker, "price": p, "change": sd.day_change_pct,
+                        "rsi": td.rsi_14, "vol": sd.relative_volume,
+                        "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
+                        "dedup_key": key,
+                    })
+
+            # ── Kondisi 2: BUY ON WEAKNESS (winrate ~75%) ─────────────────
+            # Turun 3+ hari, MACD histogram mulai berbalik, dekat lower BB, RSI oversold
+            if (
+                td.down_days >= 3
+                and td.macd_hist_rising
+                and td.macd_histogram < 0
+                and td.bb_pct < 0.20
+                and td.rsi_14 < 40
+            ):
+                key = f"tech_weakness:{ticker}:{today}"
+                if not cache_exists(key, ttl=TTL_WEAKNESS_DEDUP):
+                    weakness_alerts.append({
+                        "ticker": ticker, "price": p, "change": sd.day_change_pct,
+                        "rsi": td.rsi_14, "down_days": td.down_days,
+                        "bb_pct": td.bb_pct, "macd_h": td.macd_histogram,
+                        "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
+                        "dedup_key": key,
+                    })
 
         except Exception as e:
             logger.debug(f"[Tech] {ticker}: {e}")
 
-    logger.info(f"[Technical+Volume] {ts} -> {len(alerts)} sinyal BUY")
+    logger.info(
+        f"[Technical+Volume] {ts} -> "
+        f"{len(breakout_alerts)} BREAKOUT | {len(weakness_alerts)} WEAKNESS"
+    )
 
-    if not alerts:
-        return
-
-    # Urutkan: volume terbesar duluan (volume = konfidensial tertinggi)
-    alerts.sort(key=lambda x: x["vol"], reverse=True)
-
-    # Kirim sebagai pesan individual (setiap sinyal = 1 pesan — sinyal sudah ketat)
-    for r in alerts:
+    # ── Kirim CONSOL BREAKOUT ────────────────────────────────────────────────
+    breakout_alerts.sort(key=lambda x: x["vol"], reverse=True)
+    for r in breakout_alerts:
         msg = (
             f"<b>CONSOL BREAKOUT</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
             f"Volume : {r['vol']:.1f}x rata-rata\n"
-            f"RSI    : {r['rsi']:.0f}  |  MACD: {'naik' if r['macd_h'] > 0 else 'turun'}\n\n"
+            f"RSI    : {r['rsi']:.0f}\n\n"
             f"Entry : {r['entry']:,.0f}\n"
             f"TP1   : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
             f"SL    : {r['sl']:,.0f}\n\n"
             f"<i>Breakout dari konsolidasi + volume konfirmasi</i>"
+        )
+        if send_alert_chunked(msg):
+            cache_mark(r["dedup_key"])
+
+    # ── Kirim BUY ON WEAKNESS ────────────────────────────────────────────────
+    weakness_alerts.sort(key=lambda x: x["rsi"])   # RSI paling rendah duluan
+    for r in weakness_alerts:
+        msg = (
+            f"<b>BUY ON WEAKNESS</b> — {ts}\n\n"
+            f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
+            f"Turun  : {r['down_days']} hari berturut-turut\n"
+            f"RSI    : {r['rsi']:.0f}  |  BB%: {r['bb_pct']*100:.0f}%\n"
+            f"MACD   : {r['macd_h']:+.2f} (histogram membalik)\n\n"
+            f"Entry : {r['entry']:,.0f}\n"
+            f"TP1   : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
+            f"SL    : {r['sl']:,.0f}\n\n"
+            f"<i>Momentum pembalikan — hold 10 hari (backtest WR 75%)</i>"
         )
         if send_alert_chunked(msg):
             cache_mark(r["dedup_key"])
