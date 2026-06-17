@@ -130,9 +130,11 @@ def run_technical_volume() -> None:
 
     TTL_BREAKOUT_DEDUP = 4 * 3600   # tidak kirim breakout ticker sama dalam 4 jam
     TTL_WEAKNESS_DEDUP = 24 * 3600  # tidak kirim weakness ticker sama dalam 1 hari
+    TTL_RADAR_DEDUP    = 24 * 3600  # radar 1x per hari per ticker
 
-    breakout_alerts  = []
-    weakness_alerts  = []
+    breakout_alerts = []
+    weakness_alerts = []
+    radar_alerts    = []
 
     for ticker in DEFAULT_TICKERS:
         try:
@@ -142,30 +144,33 @@ def run_technical_volume() -> None:
             td = calculate_technical_data(ticker, sd.price_history)
             p  = sd.current_price
 
-            entry = p
-            tp1   = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
-            tp2   = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
-            sl    = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
+            entry  = p
+            tp1    = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
+            tp2    = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
+            sl     = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
+            entry2 = round(td.support_1, 0) if td.support_1 > 0 and td.support_1 < entry * 0.97 else None
+
+            is_breakout_signal = False
+            is_weakness_signal = False
 
             # ── Kondisi 1: CONSOL BREAKOUT (winrate ~58%) ─────────────────
-            # Breakout dari konsolidasi + MACD line & histogram positif + volume kuat
             if (
                 td.is_consolidation_breakout
-                and td.macd_line > 0        # MACD line di atas zero
-                and td.macd_histogram > 0   # histogram juga positif
+                and td.macd_line > 0
+                and td.macd_histogram > 0
                 and sd.relative_volume >= 1.5
             ):
+                is_breakout_signal = True
                 key = f"tech_breakout:{ticker}:{today}"
                 if not cache_exists(key, ttl=TTL_BREAKOUT_DEDUP):
                     breakout_alerts.append({
                         "ticker": ticker, "price": p, "change": sd.day_change_pct,
                         "rsi": td.rsi_14, "vol": sd.relative_volume,
-                        "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
+                        "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
                         "dedup_key": key,
                     })
 
             # ── Kondisi 2: BUY ON WEAKNESS (winrate ~75%) ─────────────────
-            # Turun 3+ hari, MACD histogram mulai berbalik, dekat lower BB, RSI oversold
             if (
                 td.down_days >= 3
                 and td.macd_hist_rising
@@ -173,53 +178,119 @@ def run_technical_volume() -> None:
                 and td.bb_pct < 0.20
                 and td.rsi_14 < 40
             ):
+                is_weakness_signal = True
                 key = f"tech_weakness:{ticker}:{today}"
                 if not cache_exists(key, ttl=TTL_WEAKNESS_DEDUP):
                     weakness_alerts.append({
                         "ticker": ticker, "price": p, "change": sd.day_change_pct,
                         "rsi": td.rsi_14, "down_days": td.down_days,
                         "bb_pct": td.bb_pct, "macd_h": td.macd_histogram,
-                        "entry": entry, "tp1": tp1, "tp2": tp2, "sl": sl,
+                        "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
                         "dedup_key": key,
                     })
+
+            # ── Kondisi 3: RADAR — potensial tapi belum masuk kondisi utama ──
+            if not is_breakout_signal and not is_weakness_signal:
+                radar_reasons = []
+
+                # Near-breakout: breakout biasa (bukan konsolidasi) + MACD positif + volume mulai naik
+                if td.is_breakout and td.macd_line > 0 and td.macd_histogram > 0 and sd.relative_volume >= 1.2:
+                    radar_reasons.append(f"breakout resistance + MACD positif, volume {sd.relative_volume:.1f}x (belum kuat)")
+
+                # Consol breakout tapi volume kurang
+                if td.is_consolidation_breakout and td.macd_line > 0 and 1.1 <= sd.relative_volume < 1.5:
+                    radar_reasons.append(f"consolidation breakout, tunggu volume konfirmasi ({sd.relative_volume:.1f}x)")
+
+                # Almost weakness: turun 2 hari + MACD berbalik + RSI rendah
+                if td.down_days == 2 and td.macd_hist_rising and td.macd_histogram < 0 and td.rsi_14 < 45:
+                    radar_reasons.append(f"turun 2 hari, MACD histogram mulai berbalik, RSI {td.rsi_14:.0f}")
+
+                # Weakness hampir masuk: RSI 40-50 atau BB% 20-35%
+                if (
+                    td.down_days >= 3 and td.macd_hist_rising and td.macd_histogram < 0
+                    and (40 <= td.rsi_14 < 50 or 0.20 <= td.bb_pct < 0.35)
+                ):
+                    radar_reasons.append(
+                        f"turun {td.down_days} hari, RSI {td.rsi_14:.0f}, BB {td.bb_pct*100:.0f}% — hampir oversold"
+                    )
+
+                # Momentum building: di atas EMA20+50, MACD naik, RSI 45-62, volume mulai naik
+                if (
+                    td.is_above_ema20 and td.is_above_ema50
+                    and td.macd_line > 0 and td.macd_hist_rising
+                    and 45 <= td.rsi_14 <= 62
+                    and sd.relative_volume >= 1.2
+                ):
+                    radar_reasons.append(f"momentum membangun di atas EMA20/50, RSI {td.rsi_14:.0f}, volume {sd.relative_volume:.1f}x")
+
+                if radar_reasons:
+                    key = f"tech_radar:{ticker}:{today}"
+                    if not cache_exists(key, ttl=TTL_RADAR_DEDUP):
+                        radar_alerts.append({
+                            "ticker": ticker, "price": p, "change": sd.day_change_pct,
+                            "reasons": radar_reasons,
+                            "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
+                            "rsi": td.rsi_14, "vol": sd.relative_volume,
+                            "dedup_key": key,
+                        })
 
         except Exception as e:
             logger.debug(f"[Tech] {ticker}: {e}")
 
     logger.info(
         f"[Technical+Volume] {ts} -> "
-        f"{len(breakout_alerts)} BREAKOUT | {len(weakness_alerts)} WEAKNESS"
+        f"{len(breakout_alerts)} BREAKOUT | {len(weakness_alerts)} WEAKNESS | {len(radar_alerts)} RADAR"
     )
 
     # ── Kirim CONSOL BREAKOUT ────────────────────────────────────────────────
     breakout_alerts.sort(key=lambda x: x["vol"], reverse=True)
     for r in breakout_alerts:
+        e2_line = f"Entry2 : {r['entry2']:,.0f}  (pullback ke support)\n" if r["entry2"] else ""
         msg = (
             f"<b>CONSOL BREAKOUT</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
-            f"Volume : {r['vol']:.1f}x rata-rata\n"
-            f"RSI    : {r['rsi']:.0f}\n\n"
-            f"Entry : {r['entry']:,.0f}\n"
-            f"TP1   : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
-            f"SL    : {r['sl']:,.0f}\n\n"
+            f"Volume : {r['vol']:.1f}x rata-rata  |  RSI: {r['rsi']:.0f}\n\n"
+            f"Entry  : {r['entry']:,.0f}\n"
+            f"{e2_line}"
+            f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
+            f"SL     : {r['sl']:,.0f}\n\n"
             f"<i>Breakout dari konsolidasi + volume konfirmasi</i>"
         )
         if send_alert_chunked(msg):
             cache_mark(r["dedup_key"])
 
     # ── Kirim BUY ON WEAKNESS ────────────────────────────────────────────────
-    weakness_alerts.sort(key=lambda x: x["rsi"])   # RSI paling rendah duluan
+    weakness_alerts.sort(key=lambda x: x["rsi"])
     for r in weakness_alerts:
+        e2_line = f"Entry2 : {r['entry2']:,.0f}  (averaging jika turun lagi)\n" if r["entry2"] else ""
         msg = (
             f"<b>BUY ON WEAKNESS</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
-            f"Turun  : {r['down_days']} hari berturut-turut\n"
-            f"RSI    : {r['rsi']:.0f}  |  BB%: {r['bb_pct']*100:.0f}%\n"
+            f"Turun  : {r['down_days']} hari  |  RSI: {r['rsi']:.0f}  |  BB%: {r['bb_pct']*100:.0f}%\n"
             f"MACD   : {r['macd_h']:+.2f} (histogram membalik)\n\n"
-            f"Entry : {r['entry']:,.0f}\n"
-            f"TP1   : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
-            f"SL    : {r['sl']:,.0f}\n\n"
+            f"Entry  : {r['entry']:,.0f}\n"
+            f"{e2_line}"
+            f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
+            f"SL     : {r['sl']:,.0f}\n\n"
             f"<i>Momentum pembalikan — hold 10 hari (backtest WR 75%)</i>"
+        )
+        if send_alert_chunked(msg):
+            cache_mark(r["dedup_key"])
+
+    # ── Kirim RADAR ──────────────────────────────────────────────────────────
+    radar_alerts.sort(key=lambda x: x["vol"], reverse=True)
+    for r in radar_alerts:
+        e2_line = f"Entry2 : {r['entry2']:,.0f}  (jika ada pullback ke support)\n" if r["entry2"] else ""
+        reasons_text = "\n".join(f"  • {reason}" for reason in r["reasons"])
+        msg = (
+            f"<b>📡 RADAR</b> — {ts}\n\n"
+            f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n\n"
+            f"<b>Kenapa:</b>\n{reasons_text}\n\n"
+            f"Entry  : {r['entry']:,.0f}\n"
+            f"{e2_line}"
+            f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
+            f"SL     : {r['sl']:,.0f}\n\n"
+            f"<i>Pantau — belum memenuhi semua kondisi BUY</i>"
         )
         if send_alert_chunked(msg):
             cache_mark(r["dedup_key"])
