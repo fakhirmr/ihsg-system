@@ -123,6 +123,7 @@ def run_technical_volume() -> None:
 
     from utils.data_fetcher import fetch_stock_data
     from utils.technical_calculator import calculate_technical_data
+    from utils.tradingview_ta import get_tv_ta_batch, tv_signal_line
 
     ts    = _now().strftime("%H:%M WIB")
     today = _now().strftime("%Y-%m-%d")
@@ -135,6 +136,10 @@ def run_technical_volume() -> None:
     breakout_alerts = []
     weakness_alerts = []
     radar_alerts    = []
+
+    # Fetch TV TA untuk semua ticker sekaligus (1 HTTP call)
+    tv_ta_map = get_tv_ta_batch(list(DEFAULT_TICKERS))
+    logger.info(f"[Technical+Volume] TV TA fetched untuk {len(tv_ta_map)} ticker")
 
     for ticker in DEFAULT_TICKERS:
         try:
@@ -153,6 +158,8 @@ def run_technical_volume() -> None:
             is_breakout_signal = False
             is_weakness_signal = False
 
+            tv_sig = tv_signal_line(tv_ta_map.get(ticker))
+
             # ── Kondisi 1: CONSOL BREAKOUT (winrate ~58%) ─────────────────
             if (
                 td.is_consolidation_breakout
@@ -167,7 +174,7 @@ def run_technical_volume() -> None:
                         "ticker": ticker, "price": p, "change": sd.day_change_pct,
                         "rsi": td.rsi_14, "vol": sd.relative_volume,
                         "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
-                        "dedup_key": key,
+                        "tv_sig": tv_sig, "dedup_key": key,
                     })
 
             # ── Kondisi 2: BUY ON WEAKNESS (winrate ~75%) ─────────────────
@@ -186,7 +193,7 @@ def run_technical_volume() -> None:
                         "rsi": td.rsi_14, "down_days": td.down_days,
                         "bb_pct": td.bb_pct, "macd_h": td.macd_histogram,
                         "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
-                        "dedup_key": key,
+                        "tv_sig": tv_sig, "dedup_key": key,
                     })
 
             # ── Kondisi 3: RADAR — potensial tapi belum masuk kondisi utama ──
@@ -231,7 +238,7 @@ def run_technical_volume() -> None:
                             "reasons": radar_reasons,
                             "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
                             "rsi": td.rsi_14, "vol": sd.relative_volume,
-                            "dedup_key": key,
+                            "tv_sig": tv_sig, "dedup_key": key,
                         })
 
         except Exception as e:
@@ -246,10 +253,12 @@ def run_technical_volume() -> None:
     breakout_alerts.sort(key=lambda x: x["vol"], reverse=True)
     for r in breakout_alerts:
         e2_line = f"Entry2 : {r['entry2']:,.0f}  (pullback ke support)\n" if r["entry2"] else ""
+        tv_line = f"\n{r['tv_sig']}\n" if r["tv_sig"] else ""
         msg = (
             f"<b>CONSOL BREAKOUT</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
-            f"Volume : {r['vol']:.1f}x rata-rata  |  RSI: {r['rsi']:.0f}\n\n"
+            f"Volume : {r['vol']:.1f}x rata-rata  |  RSI: {r['rsi']:.0f}"
+            f"{tv_line}\n"
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
@@ -263,11 +272,13 @@ def run_technical_volume() -> None:
     weakness_alerts.sort(key=lambda x: x["rsi"])
     for r in weakness_alerts:
         e2_line = f"Entry2 : {r['entry2']:,.0f}  (averaging jika turun lagi)\n" if r["entry2"] else ""
+        tv_line = f"\n{r['tv_sig']}\n" if r["tv_sig"] else ""
         msg = (
             f"<b>BUY ON WEAKNESS</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n"
             f"Turun  : {r['down_days']} hari  |  RSI: {r['rsi']:.0f}  |  BB%: {r['bb_pct']*100:.0f}%\n"
-            f"MACD   : {r['macd_h']:+.2f} (histogram membalik)\n\n"
+            f"MACD   : {r['macd_h']:+.2f} (histogram membalik)"
+            f"{tv_line}\n"
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
@@ -281,11 +292,13 @@ def run_technical_volume() -> None:
     radar_alerts.sort(key=lambda x: x["vol"], reverse=True)
     for r in radar_alerts:
         e2_line = f"Entry2 : {r['entry2']:,.0f}  (jika ada pullback ke support)\n" if r["entry2"] else ""
+        tv_line = f"{r['tv_sig']}\n\n" if r["tv_sig"] else ""
         reasons_text = "\n".join(f"  • {reason}" for reason in r["reasons"])
         msg = (
             f"<b>📡 RADAR</b> — {ts}\n\n"
             f"<b>{r['ticker']}</b>  {r['price']:,.0f} ({r['change']:+.1f}%)\n\n"
             f"<b>Kenapa:</b>\n{reasons_text}\n\n"
+            f"{tv_line}"
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
