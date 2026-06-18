@@ -371,19 +371,21 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                     analyzed     = analyzed_map.get(title, {})
                     publisher    = raw_article.get("publisher", analyzed.get("publisher", ""))
                     link         = raw_article.get("link", analyzed.get("link", ""))
-                    link_str     = f'\n<a href="{link}">Baca Selengkapnya</a>' if link else ""
+                    link_inline  = f' · <a href="{link}">Baca artikel</a>' if link else ""
                     summary_txt  = analyzed.get("news_summary", raw_article.get("summary", ""))
                     analysis_txt = analyzed.get("analysis", "")
 
+                    body_txt  = analysis_txt or summary_txt
+                    sent_line = f"{cond_emoji} Sentimen {sent_m} ({conf_m}%)"
+                    if conclusion:
+                        sent_line += f" — {conclusion}"
+
                     article_msg = (
-                        f"🌐 <b>Market & Macro News</b>\n"
-                        f"<i>{ts}</i>\n\n"
+                        f"🌐 <b>Market & Macro News</b>  •  <i>{ts}</i>\n\n"
                         f"📰 <b>{title}</b>\n"
-                        f"<i>{publisher}</i>{link_str}\n\n"
-                        + (f"<i>{summary_txt}</i>\n\n" if summary_txt else "")
-                        + (f"💬 {analysis_txt}\n\n" if analysis_txt else "")
-                        + f"<b>Sentimen Pasar:</b> {cond_emoji} {sent_m} ({conf_m}%)\n"
-                        + (f"<i>{conclusion}</i>" if conclusion else "")
+                        f"<i>{publisher}</i>{link_inline}\n"
+                        + (f"\n{body_txt}\n" if body_txt else "")
+                        + f"\n{sent_line}"
                     )
                     ids = send_alert_chunked(article_msg)
                     if ids:
@@ -487,30 +489,26 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
 
                 publisher   = article.get("publisher", "")
                 link        = article.get("link", "")
-                link_str    = f'\n<a href="{link}">Baca Selengkapnya</a>' if link else ""
+                link_inline = f' · <a href="{link}">Baca artikel</a>' if link else ""
                 summary_txt = article.get("news_summary", article.get("summary", ""))
                 analysis_txt = article.get("analysis", "")
 
-                fund_line = ""
+                body_txt  = analysis_txt or summary_txt
+                fund_part = ""
                 if fund_impact not in ("Unknown", ""):
-                    fund_emoji = {"Positive": "⬆️", "Negative": "⬇️", "Neutral": "➡️"}.get(fund_impact, "➡️")
-                    fund_line  = f"<b>Dampak Fundamental:</b> {fund_emoji} {fund_impact}\n"
+                    f_emoji   = {"Positive": "⬆️", "Negative": "⬇️", "Neutral": "➡️"}.get(fund_impact, "➡️")
+                    fund_part = f"\n{f_emoji} Fundamental {fund_impact}"
                     if fund_reason:
-                        fund_line += f"<i>{fund_reason}</i>\n\n"
-                    else:
-                        fund_line += "\n"
+                        fund_part += f" — {fund_reason}"
 
                 article_msg = (
-                    f"{sent_emoji} <b>Sentiment Alert — {ticker_short}</b>\n"
+                    f"{sent_emoji} <b>{ticker_short}</b>  {sd.current_price:,.0f} IDR ({sd.day_change_pct:+.1f}%)  •  {sent} ({conf}%)\n"
                     f"<i>{ts}</i>\n\n"
-                    f"<b>Saham:</b> {ticker_short} | {sd.current_price:,.0f} IDR ({sd.day_change_pct:+.1f}%)\n"
-                    f"<b>Sentimen:</b> {sent} ({conf}%)\n\n"
                     f"📰 <b>{title}</b>\n"
-                    f"<i>{publisher}</i>{link_str}\n\n"
-                    + (f"<i>{summary_txt}</i>\n\n" if summary_txt else "")
-                    + (f"💬 {analysis_txt}\n\n" if analysis_txt else "")
-                    + fund_line
-                    + f"<b>Kesimpulan:</b>\n<i>{conclusion}</i>"
+                    f"<i>{publisher}</i>{link_inline}\n"
+                    + (f"\n{body_txt}\n" if body_txt else "")
+                    + fund_part
+                    + (f"\n\n<i>{conclusion}</i>" if conclusion else "")
                 )
                 ids = send_alert_chunked(article_msg)
                 if ids:
