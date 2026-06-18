@@ -107,11 +107,18 @@ def fetch_market_news(max_items: int = 8) -> list[dict[str, str]]:
     Ambil berita market-wide IHSG dari Yahoo Finance (^JKSE + IDR=X).
     Digunakan untuk mendeteksi event besar: MSCI, BI Rate, Fed, dll.
     """
+    # ^GSPC + ^TNX untuk berita global (Fed, inflasi AS, dll)
+    # ^JKSE + IDR=X + EIDO untuk berita domestik IHSG
+    sources = ["^GSPC", "^TNX", "^JKSE", "IDR=X", "EIDO"]
+    seen_titles: set[str] = set()
     combined = []
-    for source_ticker in ["^JKSE", "IDR=X", "EIDO"]:
+    for source_ticker in sources:
         news_list = fetch_news(source_ticker, max_items=max_items)
-        if news_list:
-            combined.extend(news_list)
+        for item in news_list:
+            title = item.get("title", "").strip()
+            if title and title not in seen_titles:
+                seen_titles.add(title)
+                combined.append(item)
         if len(combined) >= max_items:
             break
     return combined[:max_items]

@@ -320,13 +320,10 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
     bearish_alerts, bullish_alerts = [], []
 
     # ── Market & Macro News — hanya weekday, per artikel, dedup per artikel ──
-    macro_sent_today = cache_exists("macro:daily", ttl=24 * 3600)
-    market_news      = fetch_market_news(max_items=8)
+    market_news = fetch_market_news(max_items=8)
 
     if not notif_ok:
         logger.info("[Sentiment] Luar jam notifikasi — market news dilewati")
-    elif macro_sent_today:
-        logger.info("[Sentiment] Macro sudah dikirim hari ini — market news dilewati")
     elif not market_news:
         logger.info("[Sentiment] Tidak ada market news dari yfinance")
     else:
