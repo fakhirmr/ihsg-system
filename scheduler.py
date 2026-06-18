@@ -358,11 +358,6 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                     market_news_text="",
                 )
 
-                sent_m     = market_result.get("sentiment", "Neutral")
-                conf_m     = market_result.get("confidence", 0)
-                cond_emoji = {"Bullish": "🟢", "Bearish": "🔴", "Neutral": "🟡"}.get(sent_m, "🟡")
-                conclusion = market_result.get("summary", "")
-
                 # Buat lookup analyzed_news berdasarkan judul
                 analyzed_map = {
                     n.get("title", "").strip(): n
@@ -385,17 +380,13 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
                     summary_txt  = analyzed.get("news_summary", raw_article.get("summary", ""))
                     analysis_txt = analyzed.get("analysis", "")
 
-                    body_txt  = analysis_txt or summary_txt
-                    sent_line = f"{cond_emoji} Sentimen {sent_m} ({conf_m}%)"
-                    if conclusion:
-                        sent_line += f" — {conclusion}"
+                    body_txt = analysis_txt or summary_txt
 
                     article_msg = (
                         f"🌐 <b>Market & Macro News</b>  •  <i>{ts}</i>\n\n"
                         f"📰 <b>{title}</b>\n"
                         f"<i>{publisher}</i>{link_inline}\n"
-                        + (f"\n{body_txt}\n" if body_txt else "")
-                        + f"\n{sent_line}"
+                        + (f"\n{body_txt}" if body_txt else "")
                     )
                     ids = send_alert_chunked(article_msg)
                     if ids:

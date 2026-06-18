@@ -121,15 +121,36 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
         return []
 
 
-def fetch_market_news(max_items: int = 8) -> list[dict[str, str]]:
+_IHSG_KEYWORDS = {
+    # Indonesia & IHSG
+    "indonesia", "ihsg", "rupiah", "idr", "bank indonesia", "bi rate",
+    "suku bunga", "idx", "jakarta", "jkse", "eido",
+    # Global macro yang relevan untuk IHSG
+    "federal reserve", "fed rate", "fomc", "rate hike", "rate cut",
+    "interest rate", "us rate", "treasury yield", "10-year yield",
+    "inflation", "cpi data", "recession", "emerging market", "em fund",
+    "china economy", "commodity", "crude oil", "coal price", "nickel",
+    "palm oil", "cpo", "gold price", "dollar index",
+    # Capital flow & indeks
+    "msci", "ftse", "capital outflow", "capital inflow", "foreign fund",
+}
+
+
+def _is_ihsg_relevant(title: str, summary: str = "") -> bool:
+    """Cek apakah artikel relevan untuk IHSG/investor Indonesia."""
+    text = (title + " " + summary).lower()
+    return any(kw in text for kw in _IHSG_KEYWORDS)
+
+
+def fetch_market_news(max_items: int = 6) -> list[dict[str, str]]:
     """
-    Ambil berita market-wide IHSG dari Yahoo Finance (^JKSE + IDR=X).
-    Digunakan untuk mendeteksi event besar: MSCI, BI Rate, Fed, dll.
+    Ambil berita market-wide yang relevan untuk IHSG.
+    Prioritas: sumber Indonesia dulu, lalu global macro.
+    Digunakan untuk mendeteksi event besar: BI Rate, Fed, MSCI, dll.
     """
-    # ^GSPC + ^TNX untuk berita global (Fed, inflasi AS, dll)
-    # ^JKSE + IDR=X + EIDO untuk berita domestik IHSG
-    sources = ["^GSPC", "^TNX", "^JKSE", "IDR=X", "EIDO"]
-    max_age_sec = 48 * 3600  # buang artikel lebih tua dari 48 jam
+    # Sumber Indonesia dulu agar BI Rate/IHSG news tidak tergeser US news
+    sources = ["^JKSE", "IDR=X", "EIDO", "^TNX", "^GSPC"]
+    max_age_sec = 48 * 3600
     cutoff = time.time() - max_age_sec
 
     seen_titles: set[str] = set()
@@ -137,14 +158,16 @@ def fetch_market_news(max_items: int = 8) -> list[dict[str, str]]:
     for source_ticker in sources:
         news_list = fetch_news(source_ticker, max_items=max_items)
         for item in news_list:
-            title = item.get("title", "").strip()
-            pub_ts = item.get("pub_ts")
-            # Lewati jika judul duplikat
+            title   = item.get("title", "").strip()
+            summary = item.get("summary", "")
+            pub_ts  = item.get("pub_ts")
             if not title or title in seen_titles:
                 continue
-            # Lewati jika artikel sudah lebih dari 48 jam (jika timestamp tersedia)
             if pub_ts is not None and pub_ts < cutoff:
-                logger.debug(f"[fetch_market_news] Skip artikel lama: {title[:60]}")
+                logger.debug(f"[fetch_market_news] Skip lama: {title[:60]}")
+                continue
+            if not _is_ihsg_relevant(title, summary):
+                logger.debug(f"[fetch_market_news] Skip tidak relevan: {title[:60]}")
                 continue
             seen_titles.add(title)
             combined.append(item)
