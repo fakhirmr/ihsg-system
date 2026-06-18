@@ -664,21 +664,29 @@ def run_macro() -> None:
         result = agent.analyze(context=context)
         cache_set("macro:daily", result)
 
-        cond = result.get("market_condition", "N/A")
-        bias = result.get("ihsg_bias", "N/A")
-        pos  = ", ".join(result.get("positive_sectors", [])[:4])
-        neg  = ", ".join(result.get("negative_sectors", [])[:3])
+        cond    = result.get("market_condition", "N/A")
+        bias    = result.get("ihsg_bias", "N/A")
+        pos     = ", ".join(result.get("positive_sectors", [])[:4])
+        neg     = ", ".join(result.get("negative_sectors", [])[:3])
+        drivers = " · ".join(result.get("key_drivers", [])[:2])
+        risks   = " · ".join(result.get("risks", [])[:2])
         summary = result.get("summary", "")
         bias_emoji = {"Bullish": "📈", "Bearish": "📉"}.get(bias, "➡️")
 
-        msg = (
-            f"<b>🌐 Macro Update — {_now().strftime('%d %b %Y')}</b>\n\n"
-            f"<b>Kondisi:</b> {cond}\n"
-            f"<b>IHSG Bias:</b> {bias_emoji} {bias}\n\n"
-            f"<b>Positif:</b> {pos or '-'}\n"
-            f"<b>Negatif:</b> {neg or '-'}\n\n"
-            f"<i>{summary}</i>"
-        )
+        lines = [f"🌐 <b>Macro Update — {_now().strftime('%d %b %Y')}</b>  •  {_now().strftime('%H:%M')} WIB"]
+        lines.append(f"{bias_emoji} {cond}  |  IHSG: {bias}\n")
+        if pos:
+            lines.append(f"✅ {pos}")
+        if neg:
+            lines.append(f"❌ {neg}")
+        if drivers:
+            lines.append(f"🔑 {drivers}")
+        if risks:
+            lines.append(f"⚠️ {risks}")
+        if summary:
+            lines.append(f"\n<i>{summary}</i>")
+
+        msg = "\n".join(lines)
         send_alert_chunked(msg)
         # Tandai agar sentiment scan tidak kirim ulang market news hari ini
         cache_mark(f"market_news_sent_daily:{_now().strftime('%Y-%m-%d')}")
