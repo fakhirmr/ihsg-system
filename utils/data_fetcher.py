@@ -5,6 +5,7 @@ Wraps yfinance to provide clean StockData objects.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -87,13 +88,31 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
                 or item.get("summary")
                 or ""
             ).strip()
-            
+
+            # Extract publish timestamp (Unix int or ISO-8601 string)
+            pub_ts = None
+            raw_ts = (
+                content.get("pubDate")
+                or item.get("providerPublishTime")
+                or content.get("displayTime")
+            )
+            if isinstance(raw_ts, (int, float)):
+                pub_ts = int(raw_ts)
+            elif isinstance(raw_ts, str):
+                import datetime
+                try:
+                    dt = datetime.datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                    pub_ts = int(dt.timestamp())
+                except Exception:
+                    pass
+
             if title:
                 results.append({
                     "title": title,
                     "publisher": publisher,
                     "link": link,
-                    "summary": summary
+                    "summary": summary,
+                    "pub_ts": pub_ts,
                 })
 
         return results
@@ -110,15 +129,25 @@ def fetch_market_news(max_items: int = 8) -> list[dict[str, str]]:
     # ^GSPC + ^TNX untuk berita global (Fed, inflasi AS, dll)
     # ^JKSE + IDR=X + EIDO untuk berita domestik IHSG
     sources = ["^GSPC", "^TNX", "^JKSE", "IDR=X", "EIDO"]
+    max_age_sec = 48 * 3600  # buang artikel lebih tua dari 48 jam
+    cutoff = time.time() - max_age_sec
+
     seen_titles: set[str] = set()
     combined = []
     for source_ticker in sources:
         news_list = fetch_news(source_ticker, max_items=max_items)
         for item in news_list:
             title = item.get("title", "").strip()
-            if title and title not in seen_titles:
-                seen_titles.add(title)
-                combined.append(item)
+            pub_ts = item.get("pub_ts")
+            # Lewati jika judul duplikat
+            if not title or title in seen_titles:
+                continue
+            # Lewati jika artikel sudah lebih dari 48 jam (jika timestamp tersedia)
+            if pub_ts is not None and pub_ts < cutoff:
+                logger.debug(f"[fetch_market_news] Skip artikel lama: {title[:60]}")
+                continue
+            seen_titles.add(title)
+            combined.append(item)
         if len(combined) >= max_items:
             break
     return combined[:max_items]
