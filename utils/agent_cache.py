@@ -33,14 +33,23 @@ def _load() -> dict:
     if CACHE_FILE.exists():
         try:
             return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as exc:
+            # File corrupt (misalnya terpotong saat restart) — backup dan mulai fresh
+            backup = CACHE_FILE.with_suffix(".bak")
+            try:
+                CACHE_FILE.replace(backup)
+            except Exception:
+                pass
+            logger.warning(f"[Cache] File corrupt, reset ke empty ({exc}). Backup: {backup}")
     return {}
 
 
 def _save(data: dict) -> None:
     try:
-        CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Tulis ke .tmp dulu, lalu rename — atomic, aman dari partial write saat restart
+        tmp = CACHE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(CACHE_FILE)
     except Exception as exc:
         logger.warning(f"[Cache] Failed to write cache: {exc}")
 

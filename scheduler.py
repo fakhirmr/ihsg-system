@@ -305,8 +305,10 @@ def run_technical_volume() -> None:
             f"SL     : {r['sl']:,.0f}\n\n"
             f"<i>Pantau — belum memenuhi semua kondisi BUY</i>"
         )
-        if send_alert_chunked(msg):
-            cache_mark(r["dedup_key"])
+        # Mark dulu sebelum kirim — RADAR adalah sinyal pantau (bukan urgent BUY),
+        # lebih baik skip 1x daripada spam duplikat setelah restart
+        cache_mark(r["dedup_key"])
+        send_alert_chunked(msg)
 
 
 # ── 2. NEWS SENTIMENT — setiap 1 jam ──────────────────────────────────────────
