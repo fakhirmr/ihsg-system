@@ -38,7 +38,18 @@ RSS_SOURCES: list[tuple[str, str]] = [
     ("Antara",         "https://www.antaranews.com/rss/ekonomi.xml"),
 ]
 
-_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; IHSGBot/1.0)"}
+# Kontan dan CNBC Indonesia menjawab 403 untuk IP datacenter (runner GitHub
+# berada di AS), padahal dari koneksi rumahan lolos. Header selengkap browser
+# menaikkan peluang; kalau tetap ditolak, fetch_rss jatuh ke cloudscraper,
+# dan fetch_market_rss masih punya jaring pengaman Google News.
+_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/128.0.0.0 Safari/537.36"),
+    "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
+    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Cache-Control": "no-cache",
+}
 _TIMEOUT = 12
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -54,6 +65,7 @@ def _clean(text: str) -> str:
          akan merusak parsing HTML Telegram kalau dibiarkan apa adanya
     """
     stripped = html.unescape(_TAG_RE.sub(" ", text or ""))
+    stripped = stripped.replace("�", "")   # sisa mojibake dari sumber
     normalised = re.sub(r"\s+", " ", stripped.replace("\xa0", " ")).strip()
     return html.escape(normalised, quote=False)
 
@@ -77,16 +89,40 @@ def _clean_url(raw: str) -> str:
     return html.escape((raw or "").strip(), quote=False)
 
 
-def fetch_rss(source_name: str, url: str, max_items: int = 40) -> list[dict]:
-    """Ambil dan parse satu feed RSS. Gagal = list kosong, tidak melempar."""
+def _get(url: str, source_name: str) -> bytes | None:
+    """GET dengan header browser; pada 403/503 coba ulang lewat cloudscraper."""
     try:
         resp = requests.get(url, headers=_HEADERS, timeout=_TIMEOUT)
-        if resp.status_code != 200:
+        if resp.status_code == 200:
+            return resp.content
+        if resp.status_code not in (403, 503):
             logger.warning(f"[RSS] {source_name} HTTP {resp.status_code}")
-            return []
-        root = ET.fromstring(resp.content)
+            return None
+        logger.info(f"[RSS] {source_name} HTTP {resp.status_code} — coba cloudscraper")
     except Exception as exc:
         logger.warning(f"[RSS] {source_name} gagal: {type(exc).__name__}: {exc}")
+        return None
+
+    try:
+        import cloudscraper
+        r2 = cloudscraper.create_scraper().get(url, timeout=_TIMEOUT)
+        if r2.status_code == 200:
+            return r2.content
+        logger.warning(f"[RSS] {source_name} cloudscraper HTTP {r2.status_code}")
+    except Exception as exc:
+        logger.warning(f"[RSS] {source_name} cloudscraper gagal: {type(exc).__name__}")
+    return None
+
+
+def fetch_rss(source_name: str, url: str, max_items: int = 40) -> list[dict]:
+    """Ambil dan parse satu feed RSS. Gagal = list kosong, tidak melempar."""
+    raw = _get(url, source_name)
+    if raw is None:
+        return []
+    try:
+        root = ET.fromstring(raw)
+    except Exception as exc:
+        logger.warning(f"[RSS] {source_name} parse gagal: {type(exc).__name__}: {exc}")
         return []
 
     items: list[dict] = []
@@ -146,9 +182,28 @@ def is_market_relevant(item: dict) -> bool:
 
 
 def fetch_market_rss(max_items: int = 8, max_age_hours: int = 24) -> list[dict]:
-    """Berita pasar/makro terbaru yang relevan untuk IHSG."""
+    """
+    Berita pasar/makro terbaru yang relevan untuk IHSG.
+
+    Sumber langsung dipakai lebih dulu. Kalau hasilnya tipis — di runner
+    GitHub, Kontan dan CNBC menjawab 403 untuk IP datacenter — ditambal
+    dari Google News, yang tetap memuat artikel penerbit yang sama.
+    """
     pool = fetch_all_rss(max_age_hours=max_age_hours)
-    return [it for it in pool if is_market_relevant(it)][:max_items]
+    out = [it for it in pool if is_market_relevant(it)]
+
+    if len(out) < max_items:
+        seen = {it["title"].lower() for it in out}
+        for item in fetch_google_market(max_age_hours=max_age_hours):
+            key = item["title"].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(item)
+            if len(out) >= max_items:
+                break
+        out.sort(key=lambda x: x.get("pub_ts") or 0, reverse=True)
+
+    return out[:max_items]
 
 
 # ── Verifikasi penyebutan kode emiten ─────────────────────────────────────────
@@ -181,6 +236,82 @@ _GNEWS_URL = (
 _GNEWS_SUFFIX_RE = re.compile(r"\s+-\s+[^-]{2,40}$")
 
 
+def _strip_source_suffix(title: str, publisher: str) -> str:
+    """
+    Buang nama sumber dari ekor judul.
+
+    Sebagian artikel membawanya DUA kali ("… - Sinar Harapan - Sinar
+    Harapan") karena penerbitnya sudah menaruh nama sendiri di judul dan
+    Google menambahkan lagi. Karena itu pencocokan persis diulang sampai
+    habis, baru pola umum dipakai sebagai penutup.
+    """
+    if not publisher:
+        return title
+    suffix = " - " + publisher
+    low_suffix = suffix.lower()
+    while title.lower().endswith(low_suffix):
+        title = title[: -len(suffix)].rstrip()
+    return _GNEWS_SUFFIX_RE.sub("", title)
+
+
+# Query yang terbukti memulangkan hasil. Catatan: kata tunggal seperti
+# "IHSG" saja justru mengembalikan 0 item di Google News locale id-ID —
+# butuh frasa lebih dari satu kata.
+GNEWS_MARKET_QUERIES = [
+    "IHSG hari ini",
+    "asing net buy saham",
+    "bursa saham Indonesia",
+    "rupiah dolar kurs",
+    '"Bank Indonesia" suku bunga',
+]
+
+
+def _fetch_gnews(query: str, max_age_hours: int) -> list[dict]:
+    """Satu query Google News RSS -> daftar artikel (belum disaring)."""
+    url = _GNEWS_URL.format(query=urllib.parse.quote(query))
+    raw = _get(url, f"GNews '{query}'")
+    if raw is None:
+        return []
+    try:
+        root = ET.fromstring(raw)
+    except Exception:
+        return []
+
+    cutoff = time.time() - max_age_hours * 3600
+    items: list[dict] = []
+    for node in root.findall(".//item"):
+        title = _clean(node.findtext("title") or "")
+        if not title:
+            continue
+        pub_ts = _parse_pubdate(node.findtext("pubDate") or "")
+        if pub_ts is not None and pub_ts < cutoff:
+            continue
+        publisher = _clean(node.findtext("source") or "")
+        items.append({
+            "title": _strip_source_suffix(title, publisher),
+            "publisher": publisher or "Google News",
+            "link": _clean_url(node.findtext("link") or ""),
+            "summary": _clean(node.findtext("description") or "")[:400],
+            "pub_ts": pub_ts,
+        })
+    return items
+
+
+def fetch_google_market(max_age_hours: int = 24, per_query: int = 3) -> list[dict]:
+    """Berita pasar dari beberapa query Google News, dedup per judul."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for q in GNEWS_MARKET_QUERIES:
+        for item in _fetch_gnews(q, max_age_hours)[:per_query]:
+            key = item["title"].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(item)
+    out.sort(key=lambda x: x.get("pub_ts") or 0, reverse=True)
+    logger.info(f"[GNews] Berita pasar: {len(out)} artikel")
+    return out
+
+
 def fetch_google_news(
     code: str, max_items: int = 5, max_age_hours: int = 48
 ) -> list[dict]:
@@ -191,46 +322,14 @@ def fetch_google_news(
     dan kata 'saham' supaya kode yang juga kata biasa (BUMI, RAJA, RATU)
     tidak menarik berita di luar konteks pasar modal.
     """
-    query = urllib.parse.quote(f'"{code}" saham')
-    cutoff = time.time() - max_age_hours * 3600
-
-    try:
-        resp = requests.get(
-            _GNEWS_URL.format(query=query), headers=_HEADERS, timeout=_TIMEOUT
-        )
-        if resp.status_code != 200:
-            logger.warning(f"[GNews] {code} HTTP {resp.status_code}")
-            return []
-        root = ET.fromstring(resp.content)
-    except Exception as exc:
-        logger.warning(f"[GNews] {code} gagal: {type(exc).__name__}: {exc}")
-        return []
-
     items: list[dict] = []
-    for node in root.findall(".//item"):
-        title = _clean(node.findtext("title") or "")
-        if not title:
-            continue
-        pub_ts = _parse_pubdate(node.findtext("pubDate") or "")
-        if pub_ts is not None and pub_ts < cutoff:
-            continue
-
-        summary = _clean(node.findtext("description") or "")[:400]
-
+    for item in _fetch_gnews(f'"{code}" saham', max_age_hours):
         # Pencarian Google tidak peka huruf besar-kecil, jadi hasilnya harus
         # diverifikasi ulang di sini — kalau tidak, query "BUMI" akan
         # memulangkan berita "Bank Bumi Arta (BNBA)".
-        if not _mentions_code(title + " " + summary, code):
+        if not _mentions_code(item["title"] + " " + item["summary"], code):
             continue
-
-        publisher = _clean(node.findtext("source") or "")
-        items.append({
-            "title": _GNEWS_SUFFIX_RE.sub("", title) if publisher else title,
-            "publisher": publisher or "Google News",
-            "link": _clean_url(node.findtext("link") or ""),
-            "summary": summary,
-            "pub_ts": pub_ts,
-        })
+        items.append(item)
         if len(items) >= max_items:
             break
 
