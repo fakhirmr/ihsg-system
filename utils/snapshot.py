@@ -96,6 +96,12 @@ def build_index() -> dict[str, Any]:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
 
+    # Buang baris hari yang belum dibuka (OHLC NaN) — lihat catatan yang
+    # sama di utils/data_fetcher.fetch_stock_data.
+    df = df[df["Close"].notna()]
+    if len(df) < 2:
+        return {}
+
     td = calculate_technical_data("^JKSE", df)
     closes = df["Close"].dropna()
     last, prev = float(closes.iloc[-1]), float(closes.iloc[-2])

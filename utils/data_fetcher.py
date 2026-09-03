@@ -284,6 +284,19 @@ def fetch_stock_data(ticker: str, period: str = "3mo") -> StockData:
             logger.warning(data.error)
             return data
 
+        # Yahoo sudah menyiapkan baris untuk hari yang belum dibuka, dengan
+        # OHLC NaN. Kalau dibiarkan, harga terakhir menjadi NaN dan SEMUA
+        # perbandingan di aturan sinyal jadi False tanpa pesan error — papan
+        # web sempat tampil 0 sinyal karena ini. Buang baris tanpa Close.
+        before = len(hist)
+        hist = hist[hist["Close"].notna()]
+        if len(hist) < before:
+            logger.debug(f"[{ticker}] {before - len(hist)} bar tanpa Close dibuang")
+        if hist.empty:
+            data.error = f"All bars have NaN Close for {ticker}"
+            logger.warning(data.error)
+            return data
+
         data.price_history = hist
         data.current_price = float(hist["Close"].iloc[-1])
         data.prev_close = (

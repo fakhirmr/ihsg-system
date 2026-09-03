@@ -60,10 +60,26 @@ jobs:
           GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
         run: python run_job.py --job dashboard
 
-      - name: Cek snapshot terbentuk
+      # Snapshot yang jelas rusak jangan sampai terbit. Sinyal boleh 0 —
+      # itu hasil yang sah kalau tidak ada saham yang memenuhi kondisi —
+      # tapi harga indeks dan tape yang kosong berarti sumber data gagal.
+      - name: Cek snapshot masuk akal
         run: |
           test -s web/data/dashboard.json
-          python -c "import json;d=json.load(open('web/data/dashboard.json',encoding='utf-8'));print('sinyal:',d['counts']['total'],'| berita:',len(d['news']),'| tape:',len(d['tape']))"
+          python - <<'PY'
+          import json, sys
+          d = json.load(open("web/data/dashboard.json", encoding="utf-8"))
+          ix, tape = d.get("index") or {}, d.get("tape") or []
+          print(f"sinyal:{d['counts']['total']} berita:{len(d['news'])} "
+                f"tape:{len(tape)} ihsg:{ix.get('last')}")
+          problems = []
+          if not ix.get("last"):
+              problems.append("harga IHSG kosong")
+          if len(tape) < 6:
+              problems.append(f"tape cuma {len(tape)} saham")
+          if problems:
+              sys.exit("Snapshot tidak masuk akal: " + "; ".join(problems))
+          PY
 
       - uses: actions/configure-pages@v5
 
