@@ -845,9 +845,10 @@ function runs(rows) {
 
 function news(rows) {
   rows = rows || [];
-  const pubs = rows.map(x => x.publisher).filter((v, i, a) => a.indexOf(v) === i)
-                   .slice(0, 3).join(" · ");
-  el("newsSrc").textContent = pubs || "—";
+  /* Nama penerbit dari Google News bisa panjang ("Pusat Data Kontan",
+     "Koran Jakarta ®"); merangkainya membuat header membungkus dua baris.
+     Jumlah artikel selalu pendek dan sama informatifnya. */
+  el("newsSrc").textContent = rows.length ? rows.length + " artikel" : "—";
   el("news").innerHTML = rows.map(x =>
     '<div class="item"><a class="hd" href="' + esc(x.link) + '" target="_blank" rel="noopener">' +
     esc(x.title) + "</a>" +
