@@ -150,6 +150,7 @@ def run_technical_volume() -> None:
     from utils.data_fetcher import fetch_stock_data
     from utils.technical_calculator import calculate_technical_data
     from utils.tradingview_ta import get_tv_ta_batch, tv_signal_line
+    from utils.signal_rules import classify, BREAKOUT, WEAKNESS
 
     ts    = _now().strftime("%H:%M WIB")
     today = _now().strftime("%Y-%m-%d")
@@ -173,109 +174,44 @@ def run_technical_volume() -> None:
             if not sd.is_valid:
                 continue
             td = calculate_technical_data(ticker, sd.price_history)
-            p  = sd.current_price
 
-            entry  = p
-            tp1    = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
-            tp2    = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
-            # support_1 = minimum 30 close TERMASUK bar ini. Saat sinyal muncul
-            # di titik terendah 30 hari — persis situasi BUY ON WEAKNESS —
-            # support_1 == entry, dan max(support_1, entry*0.95) memasang stop
-            # loss di harga beli. Terjadi pada 38% sinyal weakness (backtest 6
-            # tahun), yang menekan winrate-nya ke 9,5%. Ambil yang LEBIH RENDAH
-            # dari support, minimal 2% di bawah entry, risiko maksimum tetap 5%.
-            if td.support_1 > 0:
-                sl_raw = min(td.support_1, entry * 0.98)
-            else:
-                sl_raw = entry * 0.95
-            sl     = round(max(sl_raw, entry * 0.95), 0)
-            entry2 = round(td.support_1, 0) if td.support_1 > 0 and td.support_1 < entry * 0.97 else None
+            # Kondisi & level hidup di utils/signal_rules.py supaya alert
+            # Telegram, snapshot web, dan backtest memakai aturan yang sama.
+            verdict = classify(sd, td)
+            if not verdict:
+                continue
 
-            is_breakout_signal = False
-            is_weakness_signal = False
-
+            lv     = verdict["levels"]
             tv_sig = tv_signal_line(tv_ta_map.get(ticker))
+            base   = {
+                "ticker": ticker, "price": verdict["price"], "change": verdict["change"],
+                "rsi": verdict["rsi"], "vol": verdict["vol"],
+                "entry": lv.entry, "entry2": lv.entry2,
+                "tp1": lv.tp1, "tp2": lv.tp2, "sl": lv.sl,
+                "tv_sig": tv_sig,
+            }
 
-            # ── Kondisi 1: CONSOL BREAKOUT (OOS: WR 46%, ekspektasi -0,6%) ──
-            if (
-                td.is_consolidation_breakout
-                and td.macd_line > 0
-                and td.macd_histogram > 0
-                and sd.relative_volume >= 1.5
-            ):
-                is_breakout_signal = True
+            if verdict["kind"] == BREAKOUT:
                 key = f"tech_breakout:{ticker}:{today}"
                 if not cache_exists(key, ttl=TTL_BREAKOUT_DEDUP):
-                    breakout_alerts.append({
-                        "ticker": ticker, "price": p, "change": sd.day_change_pct,
-                        "rsi": td.rsi_14, "vol": sd.relative_volume,
-                        "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
-                        "tv_sig": tv_sig, "dedup_key": key,
-                    })
+                    breakout_alerts.append({**base, "dedup_key": key})
 
-            # ── Kondisi 2: BUY ON WEAKNESS (OOS: WR 27%, ekspektasi +1,7%) ─
-            if (
-                td.down_days >= 3
-                and td.macd_hist_rising
-                and td.macd_histogram < 0
-                and td.bb_pct < 0.20
-                and td.rsi_14 < 40
-            ):
-                is_weakness_signal = True
+            elif verdict["kind"] == WEAKNESS:
                 key = f"tech_weakness:{ticker}:{today}"
                 if not cache_exists(key, ttl=TTL_WEAKNESS_DEDUP):
                     weakness_alerts.append({
-                        "ticker": ticker, "price": p, "change": sd.day_change_pct,
-                        "rsi": td.rsi_14, "down_days": td.down_days,
-                        "bb_pct": td.bb_pct, "macd_h": td.macd_histogram,
-                        "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
-                        "tv_sig": tv_sig, "dedup_key": key,
+                        **base, "dedup_key": key,
+                        "down_days": verdict["down_days"],
+                        "bb_pct": verdict["bb_pct"],
+                        "macd_h": verdict["macd_h"],
                     })
 
-            # ── Kondisi 3: RADAR — potensial tapi belum masuk kondisi utama ──
-            if not is_breakout_signal and not is_weakness_signal:
-                radar_reasons = []
-
-                # Near-breakout: breakout biasa (bukan konsolidasi) + MACD positif + volume mulai naik
-                if td.is_breakout and td.macd_line > 0 and td.macd_histogram > 0 and sd.relative_volume >= 1.2:
-                    radar_reasons.append(f"breakout resistance + MACD positif, volume {sd.relative_volume:.1f}x (belum kuat)")
-
-                # Consol breakout tapi volume kurang
-                if td.is_consolidation_breakout and td.macd_line > 0 and 1.1 <= sd.relative_volume < 1.5:
-                    radar_reasons.append(f"consolidation breakout, tunggu volume konfirmasi ({sd.relative_volume:.1f}x)")
-
-                # Almost weakness: turun 2 hari + MACD berbalik + RSI rendah
-                if td.down_days == 2 and td.macd_hist_rising and td.macd_histogram < 0 and td.rsi_14 < 45:
-                    radar_reasons.append(f"turun 2 hari, MACD histogram mulai berbalik, RSI {td.rsi_14:.0f}")
-
-                # Weakness hampir masuk: RSI 40-50 atau BB% 20-35%
-                if (
-                    td.down_days >= 3 and td.macd_hist_rising and td.macd_histogram < 0
-                    and (40 <= td.rsi_14 < 50 or 0.20 <= td.bb_pct < 0.35)
-                ):
-                    radar_reasons.append(
-                        f"turun {td.down_days} hari, RSI {td.rsi_14:.0f}, BB {td.bb_pct*100:.0f}% — hampir oversold"
-                    )
-
-                # Momentum building: di atas EMA20+50, MACD naik, RSI 45-62, volume mulai naik
-                if (
-                    td.is_above_ema20 and td.is_above_ema50
-                    and td.macd_line > 0 and td.macd_hist_rising
-                    and 45 <= td.rsi_14 <= 62
-                    and sd.relative_volume >= 1.2
-                ):
-                    radar_reasons.append(f"momentum membangun di atas EMA20/50, RSI {td.rsi_14:.0f}, volume {sd.relative_volume:.1f}x")
-
-                if radar_reasons:
-                    key = f"tech_radar:{ticker}:{today}"
-                    if not cache_exists(key, ttl=TTL_RADAR_DEDUP):
-                        radar_alerts.append({
-                            "ticker": ticker, "price": p, "change": sd.day_change_pct,
-                            "reasons": radar_reasons,
-                            "entry": entry, "entry2": entry2, "tp1": tp1, "tp2": tp2, "sl": sl,
-                            "rsi": td.rsi_14, "vol": sd.relative_volume,
-                            "tv_sig": tv_sig, "dedup_key": key,
-                        })
+            else:  # RADAR
+                key = f"tech_radar:{ticker}:{today}"
+                if not cache_exists(key, ttl=TTL_RADAR_DEDUP):
+                    radar_alerts.append({
+                        **base, "dedup_key": key, "reasons": verdict["reasons"],
+                    })
 
         except Exception as e:
             logger.debug(f"[Tech] {ticker}: {e}")
@@ -791,6 +727,25 @@ def run_supervisor_closing() -> None:
         logger.error(f"[Supervisor] Error: {e}")
         _notify("❌", "Supervisor Error", str(e)[:150])
 
+
+
+# ── 6. PAPAN WEB — snapshot JSON untuk GitHub Pages ───────────────────────────
+
+def run_dashboard() -> None:
+    """
+    Rakit web/data/dashboard.json. Tidak mengirim Telegram apa pun dan tidak
+    memakai penanda dedup — halaman web selalu menampilkan keadaan terkini,
+    bukan hanya yang belum pernah dikirim.
+    """
+    from utils.snapshot import write
+
+    logger.info("[Dashboard] Snapshot dimulai...")
+    try:
+        path = write()
+        logger.info(f"[Dashboard] Selesai — {path}")
+    except Exception as e:
+        logger.error(f"[Dashboard] Error: {e}")
+        raise
 
 
 # ── Kartu Jadwal ───────────────────────────────────────────────────────────────

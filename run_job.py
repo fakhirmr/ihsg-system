@@ -10,6 +10,7 @@ Usage:
     python run_job.py --job sentiment
     python run_job.py --job fundamental_weekly
     python run_job.py --job supervisor
+    python run_job.py --job dashboard
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ logger = logging.getLogger("JobRunner")
 from utils.logger import attach_file_handler
 attach_file_handler()
 
-VALID_JOBS = ["macro", "technical", "sentiment", "fundamental_weekly", "supervisor"]
+VALID_JOBS = ["macro", "technical", "sentiment", "fundamental_weekly", "supervisor", "dashboard"]
 
 _JOB_FN = {
     "macro":              "run_macro",
@@ -41,6 +42,7 @@ _JOB_FN = {
     "sentiment":          "run_sentiment_scan",
     "fundamental_weekly": "run_fundamental_weekly",
     "supervisor":         "run_supervisor_closing",
+    "dashboard":          "run_dashboard",
 }
 
 

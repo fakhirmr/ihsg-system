@@ -1,0 +1,85 @@
+name: Papan Web (setiap 30 menit, jam pasar)
+
+# Merakit web/data/dashboard.json lalu menerbitkan folder web/ ke GitHub
+# Pages. Tidak ada commit sama sekali — artefak diunggah langsung ke Pages,
+# jadi riwayat repo tidak dipenuhi commit data tiap setengah jam.
+
+on:
+  schedule:
+    # Tiap 30 menit 09:05–16:35 WIB (02:05–09:35 UTC), Senin–Jumat.
+    # Digeser 5 menit dari technical.yml supaya keduanya tidak berebut
+    # yfinance pada menit yang sama.
+    - cron: '5,35 2,3,4,5,6,7,8,9 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read        # membaca status workflow lain untuk panel "Jalannya agent"
+  pages: write
+  id-token: write
+
+# Satu deploy Pages pada satu waktu; run baru menggantikan yang mengantre.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Runner GitHub default UTC; semua jadwal di kode ini WIB
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Restore agent cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/agent_cache.json
+          key: ihsg-dashboard-${{ github.run_id }}
+          restore-keys: |
+            ihsg-dashboard-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build snapshot
+        env:
+          LLM_PROVIDER:   ${{ secrets.LLM_PROVIDER }}
+          GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+        run: python run_job.py --job dashboard
+
+      - name: Cek snapshot terbentuk
+        run: |
+          test -s web/data/dashboard.json
+          python -c "import json;d=json.load(open('web/data/dashboard.json',encoding='utf-8'));print('sinyal:',d['counts']['total'],'| berita:',len(d['news']),'| tape:',len(d['tape']))"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Papan sinyal IHSG — slip sinyal, geometri risiko, jalannya agent, dan hasil uji balik.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%A1%3C/text%3E%3C/svg%3E">
+<title>Papan Sinyal IHSG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+/* ─── Token: mode terang lengkap di :root polos ─────────────────────── */
+:root {
+  color-scheme: light;
+
+  --ground:      #f6f6f4;
+  --surface:     #ffffff;
+  --surface-2:   #f1f1ee;
+  --ink:         #15171b;
+  --ink-2:       #5b6068;
+  --ink-3:       #686d75;
+  --rule:        #e2e2dd;
+  --rule-strong: #cfcfc8;
+  --accent:      #3f3bbf;
+  --accent-wash: rgba(63, 59, 191, 0.08);
+
+  /* Status — tetap, tidak pernah dipakai sebagai aksen */
+  --good:     #0ca30c;
+  --warning:  #fab219;
+  --serious:  #ec835a;
+  --critical: #d03b3b;
+
+  /* Arah pasar */
+  --naik:  #006300;
+  --turun: #d03b3b;
+
+  --shadow: 0 1px 2px rgba(21, 23, 27, .05), 0 1px 1px rgba(21, 23, 27, .04);
+
+  --step--1: 0.75rem;
+  --step-0:  0.875rem;
+  --step-1:  1rem;
+  --step-2:  1.25rem;
+  --step-3:  1.625rem;
+  --step-4:  2.25rem;
+
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Archivo", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ─── Mode gelap: OS (boleh dikalahkan stempel terang) ──────────────── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ground:      #0e0f12;
+    --surface:     #181a1e;
+    --surface-2:   #1f2126;
+    --ink:         #f3f3f1;
+    --ink-2:       #adb2b9;
+    --ink-3:       #8d929a;
+    --rule:        #272b30;
+    --rule-strong: #363b41;
+    --accent:      #8f8af7;
+    --accent-wash: rgba(143, 138, 247, 0.13);
+    --naik:  #0ca30c;
+    --turun: #e66767;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+  }
+}
+
+/* ─── Mode gelap: stempel eksplisit, harus menang ───────────────────── */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ground:      #0e0f12;
+  --surface:     #181a1e;
+  --surface-2:   #1f2126;
+  --ink:         #f3f3f1;
+  --ink-2:       #adb2b9;
+  --ink-3:       #8d929a;
+  --rule:        #272b30;
+  --rule-strong: #363b41;
+  --accent:      #8f8af7;
+  --accent-wash: rgba(143, 138, 247, 0.13);
+  --naik:  #0ca30c;
+  --turun: #e66767;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--step-0);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+h1, h2, h3 { margin: 0; text-wrap: balance; font-weight: 600; letter-spacing: -0.012em; }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.label {
+  font-size: var(--step--1);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 600;
+}
+
+/* ─── Kerangka ──────────────────────────────────────────────────────── */
+.shell { max-width: 1280px; margin: 0 auto; padding: 0 20px 56px; }
+
+header.top {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--rule);
+}
+.top-in {
+  max-width: 1280px; margin: 0 auto; padding: 12px 20px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+}
+.brand { display: flex; align-items: baseline; gap: 9px; margin-right: auto; }
+.brand .mark {
+  font-family: var(--mono); font-weight: 600; font-size: var(--step--1);
+  color: var(--surface); background: var(--accent);
+  padding: 3px 6px; border-radius: 3px; letter-spacing: .04em;
+}
+.brand h1 { font-size: var(--step-1); font-weight: 700; }
+.brand .tz { font-family: var(--mono); font-size: var(--step--1); color: var(--ink-3); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--step--1); font-weight: 600;
+  padding: 4px 9px; border-radius: 999px;
+  border: 1px solid var(--rule-strong); background: var(--surface);
+  white-space: nowrap;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.good { background: var(--good); }
+.dot.warning { background: var(--warning); }
+.dot.critical { background: var(--critical); }
+.dot.idle { background: var(--rule-strong); }
+
+/* ─── Tape berjalan ─────────────────────────────────────────────────── */
+.tape {
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  overflow: hidden;
+  position: relative;
+}
+.tape-track {
+  display: flex; gap: 26px; width: max-content;
+  padding: 7px 0;
+  animation: slide 52s linear infinite;
+}
+.tape:hover .tape-track, .tape:focus-within .tape-track { animation-play-state: paused; }
+@keyframes slide { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) {
+  .tape { overflow-x: auto; }
+  .tape-track { animation: none; }
+}
+.tape-item {
+  display: flex; align-items: baseline; gap: 7px;
+  font-family: var(--mono); font-size: var(--step--1);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tape-item b { font-weight: 600; color: var(--ink); }
+.tape-item .px { color: var(--ink-2); }
+.up { color: var(--naik); }
+.down { color: var(--turun); }
+
+/* ─── Grid utama ────────────────────────────────────────────────────── */
+.strip {
+  display: grid; gap: 14px; margin: 22px 0;
+  grid-template-columns: minmax(0, 1.55fr) repeat(3, minmax(0, 1fr));
+}
+@media (max-width: 1080px) { .strip { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 620px)  { .strip { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}
+.card-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px; border-bottom: 1px solid var(--rule);
+}
+.card-h h2 { font-size: var(--step-0); font-weight: 600; }
+.card-h .spacer { margin-left: auto; }
+.card-b { padding: 14px; }
+
+/* Kartu statistik */
+.tile { padding: 13px 14px; display: flex; flex-direction: column; gap: 3px; }
+.tile .v { font-family: var(--mono); font-size: var(--step-3); font-weight: 600; line-height: 1.1; letter-spacing: -.02em; }
+.tile .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+/* Readout kunci–nilai: mengisi kartu dengan angka, bukan dengan udara */
+.kv { display: flex; flex-direction: column; margin-top: 10px; border-top: 1px solid var(--rule); }
+.kv div {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--rule);
+}
+.kv div:last-child { border-bottom: 0; }
+.kv .k { font-size: var(--step--1); color: var(--ink-2); }
+.kv .n { font-family: var(--mono); font-size: var(--step--1); font-weight: 600; font-variant-numeric: tabular-nums; }
+.kv .n.zero { color: var(--ink-3); font-weight: 400; }
+
+.chip {
+  font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 3px;
+  background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+/* ─── Grafik IHSG ───────────────────────────────────────────────────── */
+.idx-head { display: flex; align-items: flex-start; gap: 14px; padding: 13px 14px 0; flex-wrap: wrap; }
+.idx-head .v { font-family: var(--mono); font-size: var(--step-4); font-weight: 600; line-height: 1; letter-spacing: -.025em; }
+.idx-head .delta { font-family: var(--mono); font-size: var(--step-0); font-weight: 600; }
+.idx-meta { margin-left: auto; text-align: right; display: flex; flex-direction: column; gap: 3px; }
+.chartwrap { position: relative; padding: 6px 0 0; }
+.chartwrap svg { display: block; width: 100%; height: 112px; }
+.tip {
+  position: absolute; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -110%); transition: opacity .1s;
+  background: var(--ink); color: var(--ground);
+  border-radius: 4px; padding: 5px 8px; white-space: nowrap;
+  font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums;
+  z-index: 5;
+}
+.tip.on { opacity: 1; }
+
+/* ─── Dua kolom ─────────────────────────────────────────────────────── */
+.cols { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+@media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
+
+/* ─── Kendali ───────────────────────────────────────────────────────── */
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.seg { display: flex; border: 1px solid var(--rule-strong); border-radius: 5px; overflow: hidden; }
+.seg button {
+  font-family: var(--sans); font-size: var(--step--1); font-weight: 600;
+  padding: 5px 11px; border: 0; background: var(--surface); color: var(--ink-2);
+  cursor: pointer; border-right: 1px solid var(--rule);
+}
+.seg button:last-child { border-right: 0; }
+.seg button:hover { background: var(--surface-2); color: var(--ink); }
+/* Teks tombol aktif memakai --surface: gelap-di-atas-indigo-terang saat mode
+   gelap, terang-di-atas-indigo-tua saat mode terang. Satu token, dua mode. */
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+
+input[type="search"] {
+  font-family: var(--mono); font-size: var(--step--1);
+  padding: 5px 9px; width: 116px;
+  border: 1px solid var(--rule-strong); border-radius: 5px;
+  background: var(--surface); color: var(--ink);
+}
+input[type="search"]::placeholder { color: var(--ink-3); }
+
+/* ─── Slip sinyal ───────────────────────────────────────────────────── */
+.tickets { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); }
+/* Di bawah 420px sisa ruang bisa turun di bawah dasar 268px minmax dan
+   memaksa halaman menggeser — di situ kolomnya dipaksa satu. */
+@media (max-width: 420px) {
+  .shell { padding-left: 12px; padding-right: 12px; }
+  .tickets { grid-template-columns: 1fr; }
+}
+.ticket {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 6px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ticket.hide { display: none; }
+.t-kind {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 12px; border-bottom: 1px dashed var(--rule);
+  font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--ink-2); background: var(--surface-2);
+}
+.t-kind .spacer { margin-left: auto; }
+.t-head { padding: 11px 12px 9px; display: flex; align-items: baseline; gap: 8px; }
+.t-head .tk { font-family: var(--mono); font-size: var(--step-2); font-weight: 600; letter-spacing: -.01em; }
+.t-head .px { font-family: var(--mono); font-size: var(--step-0); color: var(--ink-2); margin-left: auto; font-variant-numeric: tabular-nums; }
+.t-head .ch { font-family: var(--mono); font-size: var(--step-0); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.t-why { padding: 0 12px 11px; display: flex; flex-direction: column; gap: 5px; }
+.t-why li { font-size: var(--step--1); color: var(--ink-2); line-height: 1.4; }
+.t-why ul { margin: 0; padding-left: 15px; display: flex; flex-direction: column; gap: 5px; }
+
+/* Geometri risiko */
+.rr { padding: 0 12px 11px; }
+.rr-bar { height: 6px; border-radius: 3px; display: flex; overflow: hidden; background: var(--surface-2); }
+.rr-bar .risk { background: var(--turun); }
+.rr-bar .gap { width: 2px; background: var(--surface); flex: none; }
+.rr-bar .reward { background: var(--naik); }
+.rr-legend {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  margin-top: 5px; font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--ink-3); white-space: nowrap;
+}
+.rr-legend .risk-n   { color: var(--turun); }
+.rr-legend .reward-n { color: var(--naik); }
+.rr-ratio { font-weight: 600; margin: 0 auto; }
+.rr-ratio.thin { color: var(--critical); }
+.rr-ratio.ok { color: var(--naik); }
+
+.t-levels {
+  border-top: 1px solid var(--rule);
+  display: grid; grid-template-columns: 1fr 1fr;
+  margin-top: auto;              /* dasar slip sejajar meski alasan beda panjang */
+}
+.lv {
+  padding: 7px 12px; border-bottom: 1px solid var(--rule);
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.lv:nth-child(odd) { border-right: 1px solid var(--rule); }
+.lv:nth-last-child(-n+2) { border-bottom: 0; }
+.lv .k { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); }
+.lv .n { font-family: var(--mono); font-size: var(--step-0); font-weight: 500; font-variant-numeric: tabular-nums; }
+.lv .n.tp { color: var(--naik); }
+.lv .n.sl { color: var(--turun); }
+
+/* ─── Tabel ─────────────────────────────────────────────────────────── */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--step-0); }
+th, td { padding: 9px 12px; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+thead th {
+  font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600; border-bottom: 1px solid var(--rule-strong);
+}
+tbody td { border-bottom: 1px solid var(--rule); }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr.base td { color: var(--ink-2); background: var(--surface-2); }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+td .exp { font-weight: 600; }
+
+/* Bar ekspektasi */
+.expbar { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.expbar .track { width: 74px; height: 8px; position: relative; background: var(--surface-2); border-radius: 2px; flex: none; }
+.expbar .zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--rule-strong); }
+.expbar .fill { position: absolute; top: 0; bottom: 0; border-radius: 2px; }
+
+/* ─── Rail ──────────────────────────────────────────────────────────── */
+.rail { display: flex; flex-direction: column; gap: 14px; }
+.runs { display: flex; flex-direction: column; }
+.run {
+  display: grid; grid-template-columns: auto 1fr auto; gap: 9px; align-items: center;
+  padding: 9px 14px; border-bottom: 1px solid var(--rule);
+}
+.run:last-child { border-bottom: 0; }
+.run .nm { font-size: var(--step--1); font-weight: 600; }
+.run .tm { font-family: var(--mono); font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; }
+
+.news { display: flex; flex-direction: column; }
+.item { padding: 11px 14px; border-bottom: 1px solid var(--rule); display: flex; flex-direction: column; gap: 4px; }
+.item:last-child { border-bottom: 0; }
+.item .hd { font-size: var(--step--1); font-weight: 500; line-height: 1.4; color: var(--ink); text-decoration: none; }
+.item .hd:hover { color: var(--accent); text-decoration: underline; }
+.item .src { display: flex; gap: 7px; align-items: baseline; font-size: 11px; color: var(--ink-3); }
+.item .src .pub { font-weight: 600; color: var(--ink-2); }
+.item .src .ago { font-family: var(--mono); }
+
+.sect { display: flex; align-items: center; gap: 10px; margin: 26px 0 12px; flex-wrap: wrap; }
+.sect h2 { font-size: var(--step-2); font-weight: 700; }
+.sect .spacer { margin-left: auto; }
+@media (max-width: 560px) {
+  .sect .spacer { display: none; }          /* kendali turun ke baris sendiri */
+  .controls { width: 100%; }
+  .seg { flex: 1; }
+  .seg button { flex: 1; text-align: center; padding: 6px 4px; }
+  input[type="search"] { width: 100%; }
+}
+.count { font-family: var(--mono); font-size: var(--step--1); color: var(--ink-3); }
+
+.warnbox {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 5px;
+  background: var(--accent-wash); border: 1px solid var(--rule);
+  font-size: var(--step--1); color: var(--ink-2); line-height: 1.45;
+}
+.warnbox b { color: var(--ink); }
+.warnbox .ic { flex: none; font-size: var(--step-0); line-height: 1.3; }
+
+footer {
+  margin-top: 34px; padding-top: 14px; border-top: 1px solid var(--rule);
+  display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline;
+  font-size: var(--step--1); color: var(--ink-3);
+}
+footer .num { color: var(--ink-2); }
+.empty { padding: 30px 14px; text-align: center; color: var(--ink-3); font-size: var(--step-0); }
+
+/* Keadaan muat & gagal */
+.loadstate {
+  margin: 40px 0; padding: 26px 18px; text-align: center;
+  border: 1px dashed var(--rule-strong); border-radius: 6px;
+  color: var(--ink-2); font-size: var(--step-0); line-height: 1.7;
+}
+.loadstate code, .warnbox code {
+  font-family: var(--mono); font-size: var(--step--1);
+  background: var(--surface-2); padding: 2px 5px; border-radius: 3px;
+}
+
+/* Pita data basi — dipasang di atas segalanya, bukan disembunyikan.
+   Warning kuning kontrasnya rendah di mode terang, jadi ia hanya jadi
+   latar tipis; teksnya tetap memakai token tinta biasa. */
+.warnbox.stale {
+  margin-top: 18px;
+  background: color-mix(in srgb, var(--warning) 13%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--rule));
+}
+.warnbox.stale code { background: var(--surface); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand">
+      <span class="mark">IDX</span>
+      <h1>Papan Sinyal IHSG</h1>
+      <span class="tz" id="stamp">memuat…</span>
+    </div>
+    <span class="pill" id="pillMarket"><span class="dot idle"></span>—</span>
+    <span class="pill" id="pillHealth"><span class="dot idle"></span>—</span>
+  </div>
+</header>
+
+<div class="tape" tabindex="0" aria-label="Harga watchlist">
+  <div class="tape-track" id="tape"></div>
+</div>
+
+<div class="shell">
+  <div id="staleBar" hidden></div>
+
+  <div id="loading" class="loadstate">Memuat data papan…</div>
+  <div id="failed" class="loadstate" hidden></div>
+
+  <div id="app" hidden>
+    <section class="strip">
+      <div class="card">
+        <div class="idx-head">
+          <div>
+            <div class="label">IHSG</div>
+            <div class="v num" id="idxLast">—</div>
+            <div class="delta num" id="idxDelta">—</div>
+          </div>
+          <div class="idx-meta">
+            <span class="pill" id="idxTrend"><span class="dot idle"></span>—</span>
+            <span class="chip" id="idxRsi">—</span>
+          </div>
+        </div>
+        <div class="chartwrap" id="chartwrap">
+          <svg id="chart" viewBox="0 0 600 112" preserveAspectRatio="none" role="img" aria-label=""></svg>
+          <div class="tip" id="tip"></div>
+        </div>
+      </div>
+
+      <div class="card tile">
+        <div class="label">Sinyal hari ini</div>
+        <div class="v" id="sigTotal">—</div>
+        <div class="kv" id="sigBreak"></div>
+      </div>
+
+      <div class="card tile">
+        <div class="label">Kondisi makro</div>
+        <div class="v" id="macroCond" style="font-size:var(--step-2)">—</div>
+        <div class="chips" id="macroSectors"></div>
+        <div class="kv" id="macroKv"></div>
+      </div>
+
+      <div class="card tile">
+        <div class="label">Bias IHSG</div>
+        <div class="v" id="macroBias" style="font-size:var(--step-2)">—</div>
+        <div class="kv" id="biasKv"></div>
+      </div>
+    </section>
+
+    <div class="cols">
+      <main>
+        <div class="sect">
+          <h2>Slip sinyal</h2>
+          <span class="count" id="shown">—</span>
+          <span class="spacer"></span>
+          <div class="controls">
+            <div class="seg" role="group" aria-label="Saring jenis sinyal">
+              <button type="button" data-f="all" aria-pressed="true">Semua</button>
+              <button type="button" data-f="RADAR" aria-pressed="false">Radar</button>
+              <button type="button" data-f="BREAKOUT" aria-pressed="false">Breakout</button>
+              <button type="button" data-f="WEAKNESS" aria-pressed="false">Weakness</button>
+            </div>
+            <input type="search" id="q" placeholder="Kode…" aria-label="Cari kode saham">
+          </div>
+        </div>
+
+        <div class="tickets" id="tickets"></div>
+        <div class="empty" id="empty" hidden>Tidak ada sinyal yang cocok.</div>
+
+        <div class="sect">
+          <h2>Uji balik out-of-sample</h2>
+          <span class="count" id="btPeriod">—</span>
+        </div>
+
+        <div class="card">
+          <div class="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Aturan</th>
+                  <th scope="col">N</th>
+                  <th scope="col">Profit</th>
+                  <th scope="col">Ekspektasi / trade</th>
+                  <th scope="col">PF</th>
+                </tr>
+              </thead>
+              <tbody id="btBody"></tbody>
+            </table>
+          </div>
+          <div class="card-b" style="border-top:1px solid var(--rule)">
+            <div class="warnbox">
+              <span class="ic" aria-hidden="true">&#9650;</span>
+              <span><b>Consol Breakout rugi secara struktural.</b> TP1 di +4% lawan SL &minus;5% menuntut
+              profit di atas 55% sekadar untuk impas; yang tercapai 46% &mdash; di bawah entry acak.
+              Ekspektasi positif Buy on Weakness ditopang 3 trade dari 74 sinyal.</span>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="rail">
+        <div class="card">
+          <div class="card-h"><h2>Jalannya agent</h2><span class="spacer"></span>
+            <span class="label">Terakhir</span></div>
+          <div class="runs" id="runs"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Berita pasar</h2><span class="spacer"></span>
+            <span class="label" id="newsSrc">&mdash;</span></div>
+          <div class="news" id="news"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><h2>Sumber data</h2></div>
+          <div class="runs" id="sources"></div>
+        </div>
+      </aside>
+    </div>
+
+    <footer>
+      <span>Sinyal adalah alat bantu analisis, bukan rekomendasi beli.</span>
+      <span class="spacer" style="margin-left:auto"></span>
+      <span>Diperbarui <span class="num" id="footStamp">&mdash;</span></span>
+      <span>&middot;</span>
+      <span>Watchlist <span class="num" id="footWatch">&mdash;</span> saham</span>
+    </footer>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   Halaman ini statis. Seluruh isinya datang dari data/dashboard.json yang
+   dirakit ulang tiap 30 menit oleh `run_job.py --job dashboard` di GitHub
+   Actions, memakai aturan sinyal yang sama persis dengan alert Telegram
+   (utils/signal_rules.py). Tidak ada server aplikasi yang perlu dijaga.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+const DATA_URL = "data/dashboard.json";
+
+/* ── Format locale id-ID ──────────────────────────────────────────────── */
+const nf  = n => Number(n).toLocaleString("id-ID");
+const nf2 = n => Number(n).toLocaleString("id-ID", {minimumFractionDigits:2, maximumFractionDigits:2});
+const pct = n => (n >= 0 ? "+" : "−") + nf2(Math.abs(n)) + "%";
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const el  = id => document.getElementById(id);
+
+/* ── Muat ─────────────────────────────────────────────────────────────── */
+async function boot() {
+  let d;
+  try {
+    const res = await fetch(DATA_URL, {cache: "no-store"});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    d = await res.json();
+  } catch (err) {
+    el("loading").hidden = true;
+    const f = el("failed");
+    f.hidden = false;
+    f.innerHTML = "<b>Data papan tidak bisa dimuat.</b><br>" +
+      esc(DATA_URL) + " — " + esc(err.message) + "<br>" +
+      "Jalankan <code>python run_job.py --job dashboard</code> untuk membuatnya.";
+    return;
+  }
+  el("loading").hidden = true;
+  el("app").hidden = false;
+  render(d);
+}
+
+function render(d) {
+  header(d); tape(d.tape); index(d.index); tiles(d);
+  signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news); sources(d.sources);
+}
+
+/* ── Header + peringatan data basi ───────────────────────────────────── */
+function header(d) {
+  el("stamp").textContent = d.generated_label;
+  el("footStamp").textContent = d.generated_label;
+  el("footWatch").textContent = nf(d.watchlist_size);
+
+  const mk = el("pillMarket");
+  mk.innerHTML = '<span class="dot ' + (d.market_open ? "good" : "warning") + '"></span>' +
+                 (d.market_open ? "Pasar buka" : "Pasar tutup");
+
+  const bad = (d.runs || []).filter(r => r.status === "critical").length;
+  const ok  = (d.runs || []).filter(r => r.status === "good").length;
+  const tot = (d.runs || []).length;
+  el("pillHealth").innerHTML =
+    '<span class="dot ' + (bad ? "critical" : ok ? "good" : "idle") + '"></span>' +
+    (bad ? bad + " workflow nonaktif" : ok + "/" + tot + " workflow jalan");
+
+  /* Sistem ini pernah mati 17 hari tanpa ketahuan. Kalau snapshot sudah
+     basi, katakan terang-terangan di paling atas halaman. */
+  const ageH = (Date.now() - new Date(d.generated_at).getTime()) / 3.6e6;
+  if (ageH > 3) {
+    const s = el("staleBar");
+    s.hidden = false;
+    s.className = "warnbox stale";
+    s.innerHTML = '<span class="ic" aria-hidden="true">&#9650;</span>' +
+      "<span><b>Data berumur " + Math.round(ageH) + " jam.</b> Snapshot terakhir " +
+      esc(d.generated_label) + " — periksa apakah workflow <code>dashboard</code> masih aktif.</span>";
+  }
+}
+
+/* ── Tape ─────────────────────────────────────────────────────────────── */
+function tape(rows) {
+  if (!rows || !rows.length) return;
+  const one = rows.map(x =>
+    '<span class="tape-item"><b>' + esc(x.t) + '</b>' +
+    '<span class="px">' + nf(x.p) + '</span>' +
+    '<span class="' + (x.c >= 0 ? "up" : "down") + '">' + pct(x.c) + '</span></span>').join("");
+  el("tape").innerHTML = one + one;      /* dua salinan: loop mulus */
+}
+
+/* ── Grafik IHSG ──────────────────────────────────────────────────────── */
+function index(ix) {
+  if (!ix || !ix.closes || !ix.closes.length) return;
+
+  el("idxLast").textContent = nf2(ix.last);
+  const up = ix.change >= 0;
+  const dl = el("idxDelta");
+  dl.textContent = (up ? "+" : "−") + nf2(Math.abs(ix.change)) + " (" + pct(ix.change_pct) + ")";
+  dl.className = "delta num " + (up ? "up" : "down");
+
+  const trendMap = {UPTREND:["good","Uptrend"], DOWNTREND:["critical","Downtrend"], NEUTRAL:["warning","Netral"]};
+  const tm = trendMap[ix.trend] || ["idle", ix.trend || "—"];
+  el("idxTrend").innerHTML = '<span class="dot ' + tm[0] + '"></span>' + esc(tm[1]);
+
+  const zone = ix.rsi >= 70 ? " · jenuh beli" : ix.rsi <= 30 ? " · jenuh jual" : "";
+  el("idxRsi").textContent = "RSI " + nf2(ix.rsi) + zone;
+
+  const W = 600, H = 112, PAD_T = 8, PAD_B = 12;
+  const dt = ix.closes, n = dt.length;
+  const lo = Math.min(...dt), hi = Math.max(...dt), span = (hi - lo) || 1;
+  const X = i => (i / (n - 1)) * W;
+  const Y = v => PAD_T + (1 - (v - lo) / span) * (H - PAD_T - PAD_B);
+  const line = dt.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(v).toFixed(1)).join("");
+
+  const svg = el("chart");
+  svg.setAttribute("aria-label",
+    "Pergerakan IHSG " + n + " hari bursa terakhir, dari " + nf2(dt[0]) + " ke " + nf2(dt[n-1]));
+  svg.innerHTML =
+    '<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">' +
+    '<stop offset="0%" stop-color="var(--accent)" stop-opacity=".16"/>' +
+    '<stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>' +
+    '<path d="' + line + "L" + W + "," + H + "L0," + H + 'Z" fill="url(#fade)"/>' +
+    '<path d="' + line + '" fill="none" stroke="var(--accent)" stroke-width="2" ' +
+      'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
+    '<line id="cross" x1="0" y1="' + PAD_T + '" x2="0" y2="' + (H - PAD_B) + '" ' +
+      'stroke="var(--rule-strong)" stroke-width="1" vector-effect="non-scaling-stroke" opacity="0"/>' +
+    '<circle id="hoverDot" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" opacity="0"/>' +
+    '<circle cx="' + X(n-1).toFixed(1) + '" cy="' + Y(dt[n-1]).toFixed(1) + '" r="4" ' +
+      'fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>';
+
+  const wrap = el("chartwrap"), tip = el("tip");
+  const cross = el("cross"), hd = el("hoverDot");
+  wrap.addEventListener("pointermove", ev => {
+    const r = wrap.getBoundingClientRect();
+    const i = Math.max(0, Math.min(n - 1, Math.round(((ev.clientX - r.left) / r.width) * (n - 1))));
+    const cx = X(i), cy = Y(dt[i]);
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("opacity", "1");
+    hd.setAttribute("cx", cx); hd.setAttribute("cy", cy); hd.setAttribute("opacity", "1");
+    tip.classList.add("on");
+    tip.style.left = (cx / W) * r.width + "px";
+    tip.style.top  = (cy / H) * r.height + "px";
+    tip.textContent = ix.dates[i] + " · " + nf2(dt[i]);
+  });
+  wrap.addEventListener("pointerleave", () => {
+    cross.setAttribute("opacity", "0"); hd.setAttribute("opacity", "0");
+    tip.classList.remove("on");
+  });
+}
+
+/* ── Kartu statistik ──────────────────────────────────────────────────── */
+const kvRow = (k, v, zero) =>
+  '<div><span class="k">' + esc(k) + '</span><span class="n' + (zero ? " zero" : "") + '">' +
+  esc(v) + "</span></div>";
+
+function tiles(d) {
+  const c = d.counts || {};
+  el("sigTotal").textContent = nf(c.total || 0);
+  el("sigBreak").innerHTML =
+    kvRow("Consol Breakout", nf(c.breakout || 0), !c.breakout) +
+    kvRow("Buy on Weakness", nf(c.weakness || 0), !c.weakness) +
+    kvRow("Radar",           nf(c.radar || 0),    !c.radar);
+
+  const m = d.macro || {};
+  const pos = m.positive_sectors || [], neg = m.negative_sectors || [];
+  el("macroCond").textContent = m.condition || "—";
+  el("macroBias").textContent = m.bias || "—";
+  el("macroSectors").innerHTML = pos.map(s => '<span class="chip">' + esc(s) + "</span>").join("");
+  el("macroKv").innerHTML =
+    kvRow("Sektor positif", nf(pos.length), !pos.length) +
+    kvRow("Sektor negatif", nf(neg.length), !neg.length);
+
+  const ix = d.index || {};
+  el("biasKv").innerHTML =
+    kvRow("Tren harga", ix.trend ? ix.trend.charAt(0) + ix.trend.slice(1).toLowerCase() : "—") +
+    kvRow("RSI", ix.rsi != null ? nf2(ix.rsi) : "—") +
+    kvRow("Sesi", d.market_open ? "Buka" : "Tutup", !d.market_open);
+}
+
+/* ── Slip sinyal ──────────────────────────────────────────────────────── */
+const KIND = {
+  RADAR:    {lbl:"Radar · pantau",  dot:"warning"},
+  BREAKOUT: {lbl:"Consol Breakout", dot:"good"},
+  WEAKNESS: {lbl:"Buy on Weakness", dot:"good"}
+};
+
+function ticketHTML(s) {
+  const meta = KIND[s.kind] || {lbl:s.kind, dot:"idle"};
+  const total = (s.risk_pct + s.reward_pct) || 1;
+  const thin  = s.rr < 1;
+  const e2 = s.entry2 != null
+    ? '<div class="lv"><span class="k">Entry 2</span><span class="n">' + nf(s.entry2) + "</span></div>"
+    : "";
+
+  return '<article class="ticket" data-kind="' + esc(s.kind) + '" data-t="' + esc(s.ticker) + '">' +
+    '<div class="t-kind"><span class="dot ' + meta.dot + '"></span>' + esc(meta.lbl) +
+      '<span class="spacer"></span><span class="chip">TV ' + esc(s.tv) + "</span></div>" +
+    '<div class="t-head"><span class="tk">' + esc(s.ticker) + "</span>" +
+      '<span class="px">' + nf(s.price) + "</span>" +
+      '<span class="ch ' + (s.change >= 0 ? "up" : "down") + '">' + pct(s.change) + "</span></div>" +
+    '<div class="t-why"><ul>' + s.reasons.map(r => "<li>" + esc(r) + "</li>").join("") + "</ul></div>" +
+    '<div class="rr"><div class="rr-bar" role="img" aria-label="Risiko ' + nf2(s.risk_pct) +
+      " persen, imbalan " + nf2(s.reward_pct) + " persen, rasio " + nf2(s.rr) + ' banding 1">' +
+      '<span class="risk" style="width:' + (s.risk_pct / total * 100).toFixed(1) + '%"></span>' +
+      '<span class="gap"></span>' +
+      '<span class="reward" style="width:' + (s.reward_pct / total * 100).toFixed(1) + '%"></span>' +
+      '</div><div class="rr-legend">' +
+      '<span class="risk-n">−' + nf2(s.risk_pct) + "%</span>" +
+      '<span class="rr-ratio ' + (thin ? "thin" : "ok") + '">' + (thin ? "▲ " : "") +
+        "R:R " + nf2(s.rr) + "</span>" +
+      '<span class="reward-n">+' + nf2(s.reward_pct) + "%</span></div></div>" +
+    '<div class="t-levels">' +
+      '<div class="lv"><span class="k">Entry</span><span class="n">' + nf(s.entry) + "</span></div>" +
+      e2 +
+      '<div class="lv"><span class="k">TP1</span><span class="n tp">' + nf(s.tp1) + "</span></div>" +
+      '<div class="lv"><span class="k">TP2</span><span class="n tp">' + nf(s.tp2) + "</span></div>" +
+      '<div class="lv"><span class="k">SL</span><span class="n sl">' + nf(s.sl) + "</span></div>" +
+      '<div class="lv"><span class="k">Volume</span><span class="n">' + nf2(s.vol) + "×</span></div>" +
+    "</div></article>";
+}
+
+function signals(rows) {
+  rows = rows || [];
+  el("tickets").innerHTML = rows.map(ticketHTML).join("");
+
+  const cards = [].slice.call(document.querySelectorAll(".ticket"));
+  const qEl = el("q");
+  const btns = [].slice.call(document.querySelectorAll(".seg button"));
+  let kind = "all";
+
+  const apply = () => {
+    const q = qEl.value.trim().toUpperCase();
+    let vis = 0;
+    cards.forEach(c => {
+      const ok = (kind === "all" || c.dataset.kind === kind) && (!q || c.dataset.t.includes(q));
+      c.classList.toggle("hide", !ok);
+      if (ok) vis++;
+    });
+    el("shown").textContent = vis + " dari " + cards.length;
+    el("empty").hidden = vis > 0;
+  };
+  btns.forEach(b => b.addEventListener("click", () => {
+    kind = b.dataset.f;
+    btns.forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    apply();
+  }));
+  qEl.addEventListener("input", apply);
+  apply();
+}
+
+/* ── Uji balik ────────────────────────────────────────────────────────── */
+function backtest(bt) {
+  if (!bt) return;
+  el("btPeriod").textContent = bt.period || "";
+  const rows = bt.rows || [];
+  const maxAbs = Math.max.apply(null, rows.map(r => Math.abs(r.exp)).concat([0.01]));
+  el("btBody").innerHTML = rows.map(r => {
+    const good = r.exp >= 0, w = (Math.abs(r.exp) / maxAbs) * 50;
+    const fill = good ? "left:50%;width:" + w + "%;background:var(--naik)"
+                      : "right:50%;width:" + w + "%;background:var(--turun)";
+    return '<tr class="' + (r.base ? "base" : "") + '">' +
+      "<td>" + esc(r.name) + "</td>" +
+      '<td class="n">' + nf(r.n) + "</td>" +
+      '<td class="n">' + r.wr + "%</td>" +
+      '<td class="n"><div class="expbar">' +
+        '<span class="exp ' + (good ? "up" : "down") + '">' + pct(r.exp) + "</span>" +
+        '<span class="track"><span class="zero"></span>' +
+        '<span class="fill" style="' + fill + '"></span></span></div></td>' +
+      '<td class="n">' + nf2(r.pf) + "</td></tr>";
+  }).join("");
+}
+
+/* ── Rail ─────────────────────────────────────────────────────────────── */
+function runs(rows) {
+  el("runs").innerHTML = (rows || []).map(r =>
+    '<div class="run"><span class="dot ' + esc(r.status) + '"></span>' +
+    '<span class="nm">' + esc(r.name) +
+      ' <span class="tm" style="text-align:left">· ' + esc(r.hint) + "</span></span>" +
+    '<span class="tm">' + esc(r.state || r.last) + "</span></div>").join("");
+}
+
+function news(rows) {
+  rows = rows || [];
+  const pubs = rows.map(x => x.publisher).filter((v, i, a) => a.indexOf(v) === i)
+                   .slice(0, 3).join(" · ");
+  el("newsSrc").textContent = pubs || "—";
+  el("news").innerHTML = rows.map(x =>
+    '<div class="item"><a class="hd" href="' + esc(x.link) + '" target="_blank" rel="noopener">' +
+    esc(x.title) + "</a>" +
+    '<div class="src"><span class="pub">' + esc(x.publisher) + "</span>" +
+    '<span class="ago">' + esc(x.ago) + "</span></div></div>").join("");
+}
+
+function sources(rows) {
+  el("sources").innerHTML = (rows || []).map(s =>
+    '<div class="run"><span class="dot ' + esc(s.status) + '"></span>' +
+    '<span class="nm">' + esc(s.name) + "</span>" +
+    '<span class="tm">' + esc(s.note) + "</span></div>").join("");
+}
+
+boot();
+</script>
+</body>
+</html>

@@ -28,3 +28,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Snapshot papan web — dibangun ulang tiap run, jangan dicommit
+web/data/dashboard.json
