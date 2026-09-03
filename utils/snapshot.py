@@ -268,8 +268,12 @@ def build_runs() -> list[dict[str, Any]]:
                     pass
 
             disabled = w.get("state", "") != "active"
+            # Run yang masih berjalan belum punya conclusion. Tanpa perlakuan
+            # khusus, workflow papan web selalu melaporkan dirinya "warning",
+            # karena ia memotret keadaan saat dirinya sendiri belum selesai.
+            running = concl in ("in_progress", "queued", "requested", "waiting")
             status = ("critical" if disabled
-                      else "good" if concl == "success"
+                      else "good" if concl == "success" or running
                       else "warning" if concl else "idle")
 
             out.append({
