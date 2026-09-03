@@ -40,5 +40,30 @@ def setup_logger(name: str = "ihsg_system") -> logging.Logger:
     return logger
 
 
+def attach_file_handler(level: int = logging.INFO) -> None:
+    """
+    Tambahkan file handler ke ROOT logger.
+
+    scheduler.py dan run_job.py memakai logging.basicConfig() yang hanya
+    menulis ke stdout — akibatnya logs/ihsg_system.log tetap 0 byte dan
+    tidak ada jejak yang bisa ditelusuri setelah proses berhenti.
+    """
+    root = logging.getLogger()
+    log_file = LOGS_DIR / "ihsg_system.log"
+
+    for h in root.handlers:
+        if isinstance(h, logging.FileHandler) and \
+                getattr(h, "baseFilename", "") == str(log_file):
+            return  # sudah terpasang
+
+    fh = logging.FileHandler(log_file, encoding="utf-8")
+    fh.setLevel(level)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(fh)
+
+
 # Module-level default logger
 log = setup_logger()

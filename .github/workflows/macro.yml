@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Runner GitHub default UTC; semua jadwal di kode ini WIB
+    env:
+      TZ: Asia/Jakarta
+
     steps:
       - uses: actions/checkout@v4
 
@@ -21,10 +25,11 @@ jobs:
       - name: Restore agent cache
         uses: actions/cache@v4
         with:
-          path: data/agent_cache.json
-          key: ihsg-cache-${{ github.run_id }}
+          path: |
+            data/agent_cache.json
+          key: ihsg-macro-${{ github.run_id }}
           restore-keys: |
-            ihsg-cache-
+            ihsg-macro-
 
       - name: Install dependencies
         run: pip install -r requirements.txt

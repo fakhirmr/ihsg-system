@@ -24,7 +24,10 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "auto")
 
 # ─── Groq Model ───────────────────────────────────────────────
-GROQ_MODEL: str = "llama-3.3-70b-versatile"  # Free tier: 14,400 req/day
+# llama-3.3-70b-versatile sudah DITARIK Groq — panggilan ke model itu
+# dijawab 404 model_not_found. Daftar model yang masih hidup bisa dicek
+# lewat: Groq(api_key=...).models.list()
+GROQ_MODEL: str = "openai/gpt-oss-120b"  # Free tier: 14,400 req/day
 
 # ─── Gemini Model ─────────────────────────────────────────────
 GEMINI_MODEL: str = "gemini-2.5-flash"  # Free tier: 1,500 req/day

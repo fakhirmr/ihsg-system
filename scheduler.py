@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -41,6 +42,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("Scheduler")
+
+from utils.logger import attach_file_handler
+attach_file_handler()
 
 from config import DEFAULT_TICKERS
 from utils.telegram_sender import send_alert_chunked, send_message
@@ -72,8 +76,16 @@ NOTIF_HOUR_END   = 22   # 22:00 WIB — berhenti kirim notifikasi
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+# Semua jadwal di file ini dinyatakan dalam WIB. Zona waktu HARUS eksplisit:
+# runner GitHub Actions berjalan di UTC, jadi datetime.now() polos membuat
+# _is_market_hours() menolak setiap scan teknikal (cron 02:00-08:30 UTC tidak
+# pernah masuk jendela 09:00-16:00) dan mematikan notifikasi sentimen di jam
+# pasar. Log pun mencetak "WIB" di samping jam UTC sehingga tidak kentara.
+WIB = ZoneInfo("Asia/Jakarta")
+
+
 def _now() -> datetime:
-    return datetime.now()
+    return datetime.now(WIB)
 
 def _is_weekday() -> bool:
     return _now().weekday() < 5
@@ -111,12 +123,26 @@ def _hhmm_to_today(hhmm: str) -> datetime:
 
 def run_technical_volume() -> None:
     """
-    Fast technical screener — kondisi berbasis backtest (winrate ~60%).
+    Fast technical screener — dua kondisi entry berbasis backtest.
 
-    Sinyal BUY hanya keluar jika semua kondisi terpenuhi:
-      1. Consolidation Breakout — breakout dari fase konsolidasi (ATR rendah)
-      2. MACD Histogram > 0     — momentum positif
-      3. Volume >= 1.5x rata-rata — konfirmasi volume kuat
+    Angka acuan dari backtest_honest.py (58 saham, 2020-2026, out-of-sample
+    2024-04 s/d 2026-09, exit TP1/SL persis seperti di pesan alert, sudah
+    dipotong biaya beli 0,15% + jual 0,25%):
+
+      CONSOL BREAKOUT  n=80  winrate 46%  ekspektasi -0,6%/trade  PF 0,74
+      BUY ON WEAKNESS  n=74  winrate 27%  ekspektasi +1,7%/trade  PF 1,85
+
+    Dua catatan yang harus diingat saat membaca alert:
+      - CONSOL BREAKOUT ekspektasinya NEGATIF. TP1 hampir selalu jatuh di
+        +4% sementara SL di -5%, jadi butuh winrate >55% untuk impas dan
+        yang tercapai 46%. Perlakukan sebagai info, bukan ajakan beli.
+      - Ekspektasi positif BUY ON WEAKNESS ditopang 3 trade besar
+        (BNBR +57%, RAJA +31%, BNBR +26%) dari 74 sinyal. Tanpa ketiganya
+        hasilnya mendekati nol.
+
+    Angka lama "winrate ~60% / ~58% / 75%" berasal dari grid search ~1.200
+    kombinasi dengan minimum 8 sinyal, tanpa biaya transaksi dan tanpa
+    out-of-sample — tidak bisa dipertanggungjawabkan dan sudah dibuang.
     """
     if not _is_market_hours():
         return
@@ -152,7 +178,17 @@ def run_technical_volume() -> None:
             entry  = p
             tp1    = round(td.resistance_1 if td.resistance_1 > entry else entry * 1.04, 0)
             tp2    = round(td.resistance_2 if td.resistance_2 > tp1   else entry * 1.08, 0)
-            sl     = round(max(td.support_1, entry * 0.95) if td.support_1 > 0 else entry * 0.95, 0)
+            # support_1 = minimum 30 close TERMASUK bar ini. Saat sinyal muncul
+            # di titik terendah 30 hari — persis situasi BUY ON WEAKNESS —
+            # support_1 == entry, dan max(support_1, entry*0.95) memasang stop
+            # loss di harga beli. Terjadi pada 38% sinyal weakness (backtest 6
+            # tahun), yang menekan winrate-nya ke 9,5%. Ambil yang LEBIH RENDAH
+            # dari support, minimal 2% di bawah entry, risiko maksimum tetap 5%.
+            if td.support_1 > 0:
+                sl_raw = min(td.support_1, entry * 0.98)
+            else:
+                sl_raw = entry * 0.95
+            sl     = round(max(sl_raw, entry * 0.95), 0)
             entry2 = round(td.support_1, 0) if td.support_1 > 0 and td.support_1 < entry * 0.97 else None
 
             is_breakout_signal = False
@@ -160,7 +196,7 @@ def run_technical_volume() -> None:
 
             tv_sig = tv_signal_line(tv_ta_map.get(ticker))
 
-            # ── Kondisi 1: CONSOL BREAKOUT (winrate ~58%) ─────────────────
+            # ── Kondisi 1: CONSOL BREAKOUT (OOS: WR 46%, ekspektasi -0,6%) ──
             if (
                 td.is_consolidation_breakout
                 and td.macd_line > 0
@@ -177,7 +213,7 @@ def run_technical_volume() -> None:
                         "tv_sig": tv_sig, "dedup_key": key,
                     })
 
-            # ── Kondisi 2: BUY ON WEAKNESS (winrate ~75%) ─────────────────
+            # ── Kondisi 2: BUY ON WEAKNESS (OOS: WR 27%, ekspektasi +1,7%) ─
             if (
                 td.down_days >= 3
                 and td.macd_hist_rising
@@ -263,7 +299,8 @@ def run_technical_volume() -> None:
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
             f"SL     : {r['sl']:,.0f}\n\n"
-            f"<i>Breakout dari konsolidasi + volume konfirmasi</i>"
+            f"<i>Breakout dari konsolidasi + volume konfirmasi.\n"
+            f"Backtest OOS: 46% profit, ekspektasi -0,6%/trade — TP +4% vs SL -5%.</i>"
         )
         if send_alert_chunked(msg):
             cache_mark(r["dedup_key"])
@@ -283,7 +320,8 @@ def run_technical_volume() -> None:
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
             f"SL     : {r['sl']:,.0f}\n\n"
-            f"<i>Momentum pembalikan — hold 10 hari (backtest WR 75%)</i>"
+            f"<i>Momentum pembalikan — exit di hari ke-10.\n"
+            f"Backtest OOS: 27% profit, ekspektasi +1,7%/trade, ditopang sedikit trade besar.</i>"
         )
         if send_alert_chunked(msg):
             cache_mark(r["dedup_key"])
@@ -321,6 +359,7 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
     """
     from agents.news_sentiment_agent import NewsSentimentAgent
     from utils.data_fetcher import fetch_stock_data, fetch_news, fetch_market_news
+    from utils.news_feed import fetch_all_rss
 
     ts = _now().strftime("%H:%M WIB")
     today_str = _now().strftime("%Y-%m-%d")
@@ -334,13 +373,16 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
 
     bearish_alerts, bullish_alerts = [], []
 
+    # Pool RSS di-fetch sekali lalu dipakai ulang untuk seluruh watchlist
+    news_pool = fetch_all_rss()
+
     # ── Market & Macro News — hanya weekday, per artikel, dedup per artikel ──
     market_news = fetch_market_news(max_items=8)
 
     if not notif_ok:
         logger.info("[Sentiment] Luar jam notifikasi — market news dilewati")
     elif not market_news:
-        logger.info("[Sentiment] Tidak ada market news dari yfinance")
+        logger.info("[Sentiment] Tidak ada market news dari sumber manapun")
     else:
         # Pre-check: ada artikel baru yang belum dikirim?
         new_raw = [
@@ -404,9 +446,12 @@ def run_sentiment_scan(trigger_fundamental_for: list[str] | None = None) -> None
             if not sd.is_valid:
                 continue
 
-            # Fetch berita spesifik per saham
-            stock_news = fetch_news(ticker, max_items=5)
-            
+            # Fetch berita spesifik per saham (Google News + pool RSS)
+            stock_news = fetch_news(
+                ticker, max_items=5, company_name=sd.company_name, pool=news_pool
+            )
+
+
             # Jika tidak ada berita, lewati pemanggilan LLM untuk hemat kuota API
             if not stock_news:
                 result = {
@@ -756,21 +801,23 @@ def send_schedule_card() -> None:
         f"<b>IHSG System — Jadwal Agent</b>\n"
         f"<i>{ts}</i>\n\n"
         f"<b>Technical + Volume</b>\n"
-        f"  Setiap 15 menit | 09:00-16:00 WIB\n"
-        f"  Alert jika ada sinyal kuat (skor >=35)\n\n"
+        f"  Tiap 30 menit | 09:00-15:30 WIB | Sen-Jum\n"
+        f"  CONSOL BREAKOUT, BUY ON WEAKNESS, RADAR\n\n"
         f"<b>News Sentiment</b>\n"
-        f"  Setiap 1 jam | 24/7 (Setiap Hari)\n"
+        f"  Tiap 1 jam | 09:00-16:00 WIB | Sen-Jum\n"
+        f"  Sumber: Kontan, CNBC Indonesia, Antara, Google News\n"
         f"  Auto-trigger Fundamental jika ada berita signifikan\n\n"
         f"<b>Macro</b>\n"
-        f"  Setiap hari | 08:00 WIB\n\n"
+        f"  Tiap hari kerja | 08:00 WIB\n\n"
         f"<b>Fundamental</b>\n"
-        f"  Setiap Senin | 07:30 WIB (weekly)\n"
+        f"  Tiap Senin | 07:30 WIB (weekly)\n"
         f"  + Dipicu otomatis oleh Sentiment saat ada\n"
         f"    corporate action / berita fundamental\n\n"
         f"<b>Supervisor</b>\n"
-        f"  Setiap hari kerja | 15:50 WIB (closing)\n\n"
+        f"  Tiap hari kerja | 15:50 WIB (closing)\n\n"
         f"<b>Watchlist:</b> {len(DEFAULT_TICKERS)} saham\n"
-        f"<i>Sistem berjalan di GitHub Actions — 24/7</i>"
+        f"<i>Berjalan di GitHub Actions, zona waktu WIB.\n"
+        f"Sinyal adalah alat bantu analisis, bukan rekomendasi beli.</i>"
     )
     ok = send_alert_chunked(msg)
     print("Kartu jadwal terkirim!" if ok else "Gagal kirim.")

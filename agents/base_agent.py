@@ -2,7 +2,7 @@
 IHSG Trading System — Base Agent
 All analysis agents inherit from this class.
 
-LLM Backend: Groq (Llama 3.3 70B) and/or Google Gemini 2.0 Flash.
+LLM Backend: Groq (Llama 3.3 70B) and/or Google Gemini 2.5 Flash.
 Controlled via LLM_PROVIDER env var: "groq" | "gemini" | "auto"
 In "auto" mode: Groq is primary with Gemini as fallback (and vice-versa).
 """
@@ -48,13 +48,50 @@ def _get_gemini_client():
     return _gemini_client
 
 
+# ── Rate limiter ─────────────────────────────────────────────────────────────
+# Jeda MINIMUM antar panggilan, bukan tidur tetap sebelum tiap panggilan.
+# Versi lama tidur 12 detik tiap kali dipanggil (5 req/menit) padahal kuota
+# Groq 30 req/menit — Supervisor closing 58 saham jadi makan 24-33 menit dari
+# batas 45 menit. Di sini waktu yang sudah habis untuk request sebelumnya
+# ikut diperhitungkan, jadi jeda hanya ditambahkan bila benar-benar perlu.
+_MIN_INTERVAL = {"groq": 2.5, "gemini": 4.5}   # detik -> 24 rpm / 13 rpm
+_last_call: dict[str, float] = {}
+
+
+def _is_error_response(raw: str) -> bool:
+    """
+    Semua jalur gagal di kelas ini memulangkan JSON berbentuk {"error": ...}.
+    Dipakai dispatcher untuk memutuskan apakah perlu pindah backend.
+    """
+    if not raw:
+        return True
+    text = raw.lstrip()
+    if not text.startswith("{"):
+        return False
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return '"error"' in text[:200]
+    return isinstance(parsed, dict) and "error" in parsed and len(parsed) == 1
+
+
+def _throttle(backend: str) -> None:
+    interval = _MIN_INTERVAL[backend]
+    last = _last_call.get(backend)
+    if last is not None:
+        wait = interval - (time.monotonic() - last)
+        if wait > 0:
+            time.sleep(wait)
+    _last_call[backend] = time.monotonic()
+
+
 class BaseAgent(ABC):
     """
     Abstract base class for all analysis agents.
 
     Supports two LLM backends:
       - Groq (Llama 3.3 70B)   — free: 14,400 req/day, 30 req/min
-      - Gemini 2.0 Flash        — free: 1,500 req/day, 15 req/min
+      - Gemini 2.5 Flash        — free: 1,500 req/day, 15 req/min
 
     LLM_PROVIDER controls which is used:
       "groq"   → Groq only
@@ -76,23 +113,30 @@ class BaseAgent(ABC):
         Send a request to the configured LLM and return the text response.
         Method name kept as call_claude for compatibility with all agent subclasses.
 
-        In "auto" mode:
-          - Primary = Groq (faster, higher daily quota)
-          - Fallback = Gemini (if Groq hits rate limit)
+        Backend pilihan didahulukan, tapi backend lain TETAP dicoba kalau
+        yang pertama gagal — apa pun penyebabnya.
+
+        Versi lama hanya berpindah ke cadangan saat kena rate limit, dan hanya
+        dalam mode "auto". Akibatnya ketika model Groq ditarik (404) atau kunci
+        Gemini kedaluwarsa (401), seluruh lapisan LLM ikut mati padahal backend
+        satunya sehat.
         """
-        if self.provider == "gemini":
-            return self._call_gemini(system_prompt, user_message, _retries)
-        elif self.provider == "groq":
-            return self._call_groq(system_prompt, user_message, _retries)
-        else:
-            # auto: try Groq first, fallback to Gemini on rate-limit
-            result = self._call_groq(system_prompt, user_message, _retries)
-            if '"error"' in result and ("rate limit" in result.lower() or "429" in result):
+        backends = {"groq": self._call_groq, "gemini": self._call_gemini}
+
+        primary = self.provider if self.provider in backends else "groq"
+        order = [primary] + [b for b in backends if b != primary]
+
+        result = ""
+        for i, backend in enumerate(order):
+            result = backends[backend](system_prompt, user_message, _retries)
+            if not _is_error_response(result):
+                return result
+            if i + 1 < len(order):
                 logger.warning(
-                    f"[{self.name}] Groq rate-limited → switching to Gemini fallback."
+                    f"[{self.name}] {backend} gagal ({result[:120]}) "
+                    f"— beralih ke {order[i + 1]}."
                 )
-                result = self._call_gemini(system_prompt, user_message, _retries)
-            return result
+        return result
 
     # ── Groq backend ──────────────────────────────────────────────────────────
 
@@ -103,7 +147,7 @@ class BaseAgent(ABC):
         for attempt in range(1, _retries + 1):
             try:
                 client = _get_groq_client()
-                time.sleep(12)  # Throttle: 30 req/min → safe at 12s/req
+                _throttle("groq")
                 response = client.chat.completions.create(
                     model=GROQ_MODEL,
                     max_tokens=self.max_tokens,
@@ -146,7 +190,7 @@ class BaseAgent(ABC):
     def _call_gemini(
         self, system_prompt: str, user_message: str, _retries: int = 3
     ) -> str:
-        """Call Google Gemini 2.0 Flash API. Retries on 429 with backoff."""
+        """Call Google Gemini 2.5 Flash API. Retries on 429 with backoff."""
         from google.genai import types
 
         combined_prompt = f"{system_prompt}\n\n{user_message}"
@@ -154,7 +198,7 @@ class BaseAgent(ABC):
         for attempt in range(1, _retries + 1):
             try:
                 client = _get_gemini_client()
-                time.sleep(4)  # Throttle: 15 req/min → safe at 4s/req
+                _throttle("gemini")
                 response = client.models.generate_content(
                     model=GEMINI_MODEL,
                     contents=combined_prompt,

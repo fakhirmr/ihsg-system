@@ -1,0 +1,35 @@
+name: Keepalive (cegah cron dinonaktifkan)
+
+# GitHub menonaktifkan SEMUA scheduled workflow setelah 60 hari repo tanpa
+# aktivitas commit. Itu yang terjadi pada 18 Agustus 2026: commit terakhir
+# 19 Juni, lalu seluruh sistem berhenti diam-diam tanpa notifikasi apa pun.
+# Job ini menulis satu baris timestamp setiap tanggal 1 supaya jam repo
+# selalu ter-reset jauh sebelum tenggat 60 hari.
+
+on:
+  schedule:
+    - cron: '0 1 1 * *'   # tanggal 1 tiap bulan, 08:00 WIB
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      TZ: Asia/Jakarta
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tulis heartbeat & commit
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/last-keepalive
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-keepalive
+          git diff --staged --quiet || git commit -m "chore: keepalive scheduled workflows"
+          git push

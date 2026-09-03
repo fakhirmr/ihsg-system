@@ -30,6 +30,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("JobRunner")
 
+from utils.logger import attach_file_handler
+attach_file_handler()
+
 VALID_JOBS = ["macro", "technical", "sentiment", "fundamental_weekly", "supervisor"]
 
 _JOB_FN = {

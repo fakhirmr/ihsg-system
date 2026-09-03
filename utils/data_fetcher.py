@@ -7,12 +7,58 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
+
+
+WIB = ZoneInfo("Asia/Jakarta")
+
+# Jam perdagangan pasar reguler IDX (WIB). Sesi 2 hari Jumat mulai lebih siang.
+_IDX_SESSIONS: dict[bool, list[tuple[tuple[int, int], tuple[int, int]]]] = {
+    False: [((9, 0), (12, 0)), ((13, 30), (15, 50))],   # Senin-Kamis = 320 menit
+    True:  [((9, 0), (11, 30)), ((14, 0), (15, 50))],   # Jumat        = 260 menit
+}
+
+
+def session_elapsed_fraction(now: Optional[datetime] = None) -> float:
+    """
+    Porsi sesi perdagangan hari ini yang sudah berlalu (0.0-1.0).
+
+    Dipakai untuk menormalkan volume: bar harian yfinance saat pasar masih
+    buka berisi volume SEBAGIAN hari, sementara rata-rata 20 hari berisi
+    volume hari PENUH. Tanpa koreksi, relative_volume selalu terlalu kecil
+    di pagi hari dan syarat '>= 1.5x' praktis mustahil terpenuhi sebelum
+    siang — padahal backtest-nya memakai volume hari penuh.
+    """
+    now = now or datetime.now(WIB)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=WIB)
+    else:
+        now = now.astimezone(WIB)
+
+    sessions = _IDX_SESSIONS[now.weekday() == 4]
+    total = elapsed = 0.0
+    for (sh, sm), (eh, em) in sessions:
+        start = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+        end   = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+        span  = (end - start).total_seconds()
+        total += span
+        if now >= end:
+            elapsed += span
+        elif now > start:
+            elapsed += (now - start).total_seconds()
+
+    if total <= 0:
+        return 1.0
+    # Lantai 0.15: sebelum pasar buka (dan beberapa menit pertama) pembagi
+    # yang mendekati nol akan meledakkan relative_volume.
+    return min(1.0, max(0.15, elapsed / total))
 
 
 @dataclass
@@ -31,7 +77,10 @@ class StockData:
     # Volume
     current_volume: float = 0.0
     volume_avg_20: float = 0.0
-    relative_volume: float = 1.0
+    relative_volume: float = 1.0          # sudah dinormalkan ke setara hari penuh
+    relative_volume_raw: float = 1.0      # apa adanya, sebelum normalisasi
+    session_fraction: float = 1.0         # porsi sesi yang sudah berlalu
+    is_partial_bar: bool = False          # True = bar terakhir hari berjalan
 
     # History (OHLCV DataFrame)
     price_history: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -53,41 +102,48 @@ class StockData:
     is_valid: bool = False
 
 
-def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
+def fetch_news_yahoo(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
     """
-    Ambil berita terkini dari Yahoo Finance untuk satu ticker.
-    Mengembalikan list of dictionaries berisi detail berita.
+    Ambil berita dari Yahoo Finance untuk satu ticker.
+    Sumber CADANGAN saja — untuk ticker .JK dan ^JKSE feed Yahoo sudah
+    lama tidak ter-update. Sumber utama ada di utils/news_feed.py.
+
+    Setiap artikel di-parse dalam try/except sendiri: sebelumnya satu
+    artikel cacat membuat SELURUH daftar dibuang dan fungsi ini
+    mengembalikan [], sehingga pilar sentimen mati tanpa jejak di log.
     """
     try:
         stock = yf.Ticker(ticker)
         news_items = stock.news or []
-        if not news_items:
-            return []
+    except Exception as exc:
+        logger.warning(f"[fetch_news] {ticker} gagal: {type(exc).__name__}: {exc}")
+        return []
 
-        results = []
-        for item in news_items[:max_items]:
-            content = item.get("content", item)
-            title = (
-                content.get("title")
-                or item.get("title")
-                or ""
-            ).strip()
+    results = []
+    for item in news_items[:max_items]:
+        try:
+            content = item.get("content", item) or {}
+
+            title = (content.get("title") or item.get("title") or "").strip()
+            if not title:
+                continue
+
+            # `or {}` — bukan .get(key, {}) — karena key-nya ADA tapi bernilai
+            # None pada sebagian artikel, sehingga default tidak pernah dipakai
+            # dan .get() dipanggil di atas None -> AttributeError.
             publisher = (
-                content.get("provider", {}).get("displayName")
+                (content.get("provider") or {}).get("displayName")
                 or item.get("publisher")
                 or ""
             )
             link = (
                 item.get("link")
-                or content.get("clickThroughUrl", {}).get("url")
+                or (content.get("clickThroughUrl") or {}).get("url")
+                or (content.get("canonicalUrl") or {}).get("url")
                 or content.get("url")
                 or ""
             )
-            summary = (
-                content.get("summary")
-                or item.get("summary")
-                or ""
-            ).strip()
+            summary = (content.get("summary") or item.get("summary") or "").strip()
 
             # Extract publish timestamp (Unix int or ISO-8601 string)
             pub_ts = None
@@ -99,26 +155,46 @@ def fetch_news(ticker: str, max_items: int = 5) -> list[dict[str, str]]:
             if isinstance(raw_ts, (int, float)):
                 pub_ts = int(raw_ts)
             elif isinstance(raw_ts, str):
-                import datetime
                 try:
-                    dt = datetime.datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
                     pub_ts = int(dt.timestamp())
                 except Exception:
                     pass
 
-            if title:
-                results.append({
-                    "title": title,
-                    "publisher": publisher,
-                    "link": link,
-                    "summary": summary,
-                    "pub_ts": pub_ts,
-                })
+            results.append({
+                "title": title,
+                "publisher": publisher,
+                "link": link,
+                "summary": summary,
+                "pub_ts": pub_ts,
+            })
+        except Exception as exc:
+            logger.warning(
+                f"[fetch_news] {ticker} lewati 1 artikel: {type(exc).__name__}: {exc}"
+            )
+            continue
 
-        return results
-    except Exception as exc:
-        logger.debug(f"[fetch_news] {ticker}: {exc}")
-        return []
+    return results
+
+
+def fetch_news(
+    ticker: str,
+    max_items: int = 5,
+    company_name: str = "",
+    pool: list[dict] | None = None,
+) -> list[dict[str, str]]:
+    """
+    Berita untuk satu emiten. RSS Indonesia + Google News sebagai sumber
+    utama, Yahoo Finance sebagai cadangan kalau keduanya kosong.
+    """
+    from utils.news_feed import fetch_stock_news
+
+    items = fetch_stock_news(
+        ticker, company_name=company_name, pool=pool, max_items=max_items
+    )
+    if items:
+        return items
+    return fetch_news_yahoo(ticker, max_items=max_items)
 
 
 _IHSG_KEYWORDS = {
@@ -144,19 +220,28 @@ def _is_ihsg_relevant(title: str, summary: str = "") -> bool:
 
 def fetch_market_news(max_items: int = 6) -> list[dict[str, str]]:
     """
-    Ambil berita market-wide yang relevan untuk IHSG.
-    Prioritas: sumber Indonesia dulu, lalu global macro.
-    Digunakan untuk mendeteksi event besar: BI Rate, Fed, MSCI, dll.
+    Berita market-wide yang relevan untuk IHSG (BI Rate, Fed, MSCI, dll).
+
+    Utama : RSS Kontan / CNBC Indonesia / Antara — berbahasa Indonesia
+            dan ter-update harian.
+    Cadangan: Yahoo Finance lewat ^JKSE dan proksi global. Feed Yahoo untuk
+            IHSG sudah basi berbulan-bulan, jadi ini benar-benar jaring
+            pengaman terakhir saja.
     """
-    # Sumber Indonesia dulu agar BI Rate/IHSG news tidak tergeser US news
+    from utils.news_feed import fetch_market_rss
+
+    items = fetch_market_rss(max_items=max_items, max_age_hours=24)
+    if items:
+        return items
+
+    logger.warning("[fetch_market_news] RSS kosong — fallback ke Yahoo Finance")
     sources = ["^JKSE", "IDR=X", "EIDO", "^TNX", "^GSPC"]
-    max_age_sec = 48 * 3600
-    cutoff = time.time() - max_age_sec
+    cutoff = time.time() - 48 * 3600
 
     seen_titles: set[str] = set()
     combined = []
     for source_ticker in sources:
-        news_list = fetch_news(source_ticker, max_items=max_items)
+        news_list = fetch_news_yahoo(source_ticker, max_items=max_items)
         for item in news_list:
             title   = item.get("title", "").strip()
             summary = item.get("summary", "")
@@ -215,13 +300,26 @@ def fetch_stock_data(ticker: str, period: str = "3mo") -> StockData:
 
         # ── Volume ───────────────────────────────────────────
         data.current_volume = float(hist["Volume"].iloc[-1])
-        vol_series = hist["Volume"].rolling(20).mean()
+        # Rata-rata dihitung dari bar SEBELUM bar terakhir, supaya hari
+        # berjalan yang belum tutup tidak ikut menurunkan pembandingnya.
+        vol_series = hist["Volume"].shift(1).rolling(20).mean()
         data.volume_avg_20 = float(vol_series.iloc[-1]) if not vol_series.empty else 0.0
-        data.relative_volume = (
+        data.relative_volume_raw = (
             data.current_volume / data.volume_avg_20
             if data.volume_avg_20 > 0
             else 1.0
         )
+
+        # Bar terakhir = hari ini & pasar belum tutup -> volume masih separuh
+        now_wib = datetime.now(WIB)
+        last_bar_date = hist.index[-1].date()
+        data.is_partial_bar = (
+            last_bar_date == now_wib.date() and now_wib.hour < 16
+        )
+        data.session_fraction = (
+            session_elapsed_fraction(now_wib) if data.is_partial_bar else 1.0
+        )
+        data.relative_volume = data.relative_volume_raw / data.session_fraction
 
         # ── Company Info ─────────────────────────────────────
         try:
@@ -248,10 +346,15 @@ def fetch_stock_data(ticker: str, period: str = "3mo") -> StockData:
                 setattr(data, attr, pd.DataFrame())
 
         data.is_valid = True
+        partial_note = (
+            f" | bar berjalan {data.session_fraction*100:.0f}% sesi "
+            f"(mentah {data.relative_volume_raw:.2f}x)"
+            if data.is_partial_bar else ""
+        )
         logger.info(
             f"[{ticker}] Fetched OK — Price: {data.current_price:,.0f} "
             f"| Change: {data.day_change_pct:+.2f}% "
-            f"| RelVol: {data.relative_volume:.2f}x"
+            f"| RelVol: {data.relative_volume:.2f}x{partial_note}"
         )
 
     except Exception as exc:
