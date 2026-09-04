@@ -121,7 +121,9 @@ a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset:
 }
 
 /* ─── Kerangka ──────────────────────────────────────────────────────── */
-.shell { max-width: 1280px; margin: 0 auto; padding: 0 20px 56px; }
+/* Selebar layar. Batas 1600px hanya menahan baris teks agar tidak
+   memanjang tak terbaca di monitor ultrawide; di bawah itu, penuh. */
+.shell { max-width: 1600px; margin: 0 auto; padding: 0 24px 56px; }
 
 header.top {
   position: sticky; top: 0; z-index: 40;
@@ -130,7 +132,7 @@ header.top {
   border-bottom: 1px solid var(--rule);
 }
 .top-in {
-  max-width: 1280px; margin: 0 auto; padding: 12px 20px;
+  max-width: 1600px; margin: 0 auto; padding: 12px 24px;
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
 }
 .brand { display: flex; align-items: baseline; gap: 9px; margin-right: auto; }
@@ -245,7 +247,7 @@ header.top {
 .tip.on { opacity: 1; }
 
 /* ─── Dua kolom ─────────────────────────────────────────────────────── */
-.cols { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+.cols { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
 @media (max-width: 980px) { .cols { grid-template-columns: 1fr; } }
 
 /* ─── Kendali ───────────────────────────────────────────────────────── */
@@ -358,6 +360,64 @@ input[type="search"]::placeholder { color: var(--ink-3); }
   margin-top: auto;              /* dasar slip sejajar meski alasan beda panjang */
 }
 .mentor + .t-levels { margin-top: 0; }   /* mentor sudah mendorong ke bawah */
+
+/* ─── Strip pasar global ────────────────────────────────────────────── */
+.mkt {
+  display: grid; gap: 12px; margin: 0 0 22px;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+}
+.mkt-tile {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+  box-shadow: var(--shadow); padding: 10px 12px 8px;
+  display: flex; flex-direction: column; gap: 2px; min-height: 96px;
+}
+.mkt-tile .nm {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.mkt-tile .val {
+  font-family: var(--mono); font-size: var(--step-2); font-weight: 600;
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em; line-height: 1.15;
+}
+.mkt-tile .chg {
+  font-family: var(--mono); font-size: var(--step--1); font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.mkt-tile .spark { margin-top: auto; height: 26px; }
+.mkt-tile .spark svg { display: block; width: 100%; height: 26px; }
+.mkt-tile .noquote {
+  margin-top: auto; font-size: 11px; color: var(--ink-3);
+  font-family: var(--mono);
+}
+
+/* ─── Fundamental emiten ────────────────────────────────────────────── */
+.fund { display: flex; flex-direction: column; }
+.fund-row { padding: 9px 14px; border-bottom: 1px solid var(--rule); }
+.fund-row:last-child { border-bottom: 0; }
+.fund-top {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px;
+}
+.fund-top .tk {
+  font-family: var(--mono); font-size: var(--step-0); font-weight: 600;
+}
+.fund-top .sec {
+  margin-left: auto; font-size: 11px; color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%;
+}
+.fund-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px 8px;
+}
+.fund-grid div { display: flex; flex-direction: column; gap: 1px; }
+.fund-grid .k {
+  font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600;
+}
+.fund-grid .v {
+  font-family: var(--mono); font-size: var(--step--1); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.fund-grid .v.na { color: var(--ink-3); font-weight: 400; }
+.fund-grid .v.good { color: var(--naik); }
 
 /* Kartu jurnal di rail */
 .jrnl { display: flex; flex-direction: column; }
@@ -534,6 +594,8 @@ footer .num { color: var(--ink-2); }
       </div>
     </section>
 
+    <section class="mkt" id="mkt" hidden></section>
+
     <div class="cols">
       <main>
         <div class="sect">
@@ -604,9 +666,10 @@ footer .num { color: var(--ink-2); }
           <div class="jrnl" id="jrnl"></div>
         </div>
 
-        <div class="card">
-          <div class="card-h"><h2>Sumber data</h2></div>
-          <div class="runs" id="sources"></div>
+        <div class="card" id="fundCard" hidden>
+          <div class="card-h"><h2>Fundamental emiten</h2><span class="spacer"></span>
+            <span class="label" id="fundMeta">&mdash;</span></div>
+          <div class="fund" id="fund"></div>
         </div>
       </aside>
     </div>
@@ -662,7 +725,7 @@ async function boot() {
 function render(d) {
   header(d); tape(d.tape); index(d.index); tiles(d);
   signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news);
-  sources(d.sources); journal(d.journal);
+  markets(d.markets); fundamentals(d.fundamentals); sources(d.sources); journal(d.journal);
 }
 
 /* ── Jurnal mentor ────────────────────────────────────────────────────
@@ -959,6 +1022,88 @@ function backtest(bt) {
         '<span class="fill" style="' + fill + '"></span></span></div></td>' +
       '<td class="n">' + nf2(r.pf) + "</td></tr>";
   }).join("");
+}
+
+/* ── Pasar global ─────────────────────────────────────────────────────
+   Hijau selalu berarti "bagus untuk IHSG", bukan "angkanya naik".
+   USD/IDR dan DXY dibalik: rupiah melemah / dolar menguat itu tekanan,
+   jadi kenaikannya diwarnai merah meski angkanya naik.               */
+function sparkPath(vals, w, h) {
+  const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  const span = (hi - lo) || 1;
+  return vals.map((v, i) =>
+    (i ? "L" : "M") + ((i / (vals.length - 1)) * w).toFixed(1) + "," +
+    (h - ((v - lo) / span) * (h - 2) - 1).toFixed(1)).join("");
+}
+
+function markets(rows) {
+  rows = rows || [];
+  if (!rows.length) return;
+  const box = el("mkt");
+  box.hidden = false;
+
+  box.innerHTML = rows.map(m => {
+    const raw = m.change_pct;
+    const goodForIhsg = m.invert ? raw <= 0 : raw >= 0;
+    const cls = goodForIhsg ? "up" : "down";
+    const val = Number(m.last).toLocaleString("id-ID",
+      {minimumFractionDigits: m.dec, maximumFractionDigits: m.dec});
+
+    let bottom;
+    if (m.spark && m.spark.length > 1) {
+      const d = sparkPath(m.spark, 100, 24);
+      bottom = '<div class="spark"><svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">' +
+        '<path d="' + d + '" fill="none" stroke="var(--' + (goodForIhsg ? "naik" : "turun") +
+        ')" stroke-width="1.5" vector-effect="non-scaling-stroke" ' +
+        'stroke-linejoin="round" stroke-linecap="round"/></svg></div>';
+    } else {
+      bottom = '<div class="noquote">tanpa riwayat</div>';
+    }
+
+    return '<div class="mkt-tile">' +
+      '<span class="nm">' + esc(m.name) + "</span>" +
+      '<span class="val">' + val + "</span>" +
+      '<span class="chg ' + cls + '">' + pct(raw) + "</span>" +
+      bottom + "</div>";
+  }).join("");
+}
+
+/* ── Fundamental emiten ───────────────────────────────────────────────
+   Menggantikan kartu "Sumber data". Nilai yang tidak masuk akal sudah
+   disaring di sisi Python (yfinance memulangkan PBV di atas 5.000 untuk
+   sebagian emiten .JK) dan muncul di sini sebagai "—", bukan angka. */
+function fundamentals(rows) {
+  rows = rows || [];
+  if (!rows.length) return;
+  el("fundCard").hidden = false;
+  el("fundMeta").textContent = rows.length + " emiten";
+
+  /* Persen cukup satu desimal; rasio (x) dua — "ROE 21,10%" hanya bising. */
+  const num = (v, d) => Number(v).toLocaleString("id-ID",
+    {minimumFractionDigits: d, maximumFractionDigits: d});
+  const cell = (k, v, suffix, good) =>
+    '<div><span class="k">' + k + '</span><span class="v' +
+    (v == null ? " na" : (good ? " good" : "")) + '">' +
+    (v == null ? "—" : num(v, suffix === "%" ? 1 : 2) + (suffix || "")) +
+    "</span></div>";
+
+  el("fund").innerHTML = rows.map(f =>
+    '<div class="fund-row">' +
+      '<div class="fund-top"><span class="tk">' + esc(f.ticker) + "</span>" +
+      (f.mcap != null ? '<span class="v num" style="font-size:11px;color:var(--ink-3)">' +
+        nf2(f.mcap) + " T</span>" : "") +
+      '<span class="sec">' + esc(f.sector) + "</span></div>" +
+      '<div class="fund-grid">' +
+        cell("PER", f.per, "x") +
+        cell("PBV", f.pbv, "x") +
+        cell("ROE", f.roe, "%", f.roe != null && f.roe >= 15) +
+        cell("DER", f.der, "x") +
+        cell("Div", f.divy, "%", f.divy != null && f.divy >= 5) +
+        cell("NPM", f.npm, "%") +
+        cell("Rev", f.rev, "%", f.rev != null && f.rev > 0) +
+        "<div></div>" +
+      "</div>" +
+    "</div>").join("");
 }
 
 /* ── Rail ─────────────────────────────────────────────────────────────── */

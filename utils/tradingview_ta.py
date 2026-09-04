@@ -87,6 +87,40 @@ def get_tv_ta(ticker_jk: str) -> Optional[dict]:
     return res.get(ticker_jk)
 
 
+def get_quotes(symbols: list[str]) -> dict[str, dict]:
+    """
+    Kutipan terkini untuk sekumpulan simbol TradingView (satu HTTP call).
+
+    Dipakai untuk komoditas yang tidak ada di Yahoo: batu bara Rotterdam
+    (ICEEUR:ATW1!), CPO Malaysia (MYX:FCPO1!), nikel LME (LME:NI1!).
+    """
+    if not symbols:
+        return {}
+    try:
+        resp = requests.post(
+            _TV_SCAN_URL,
+            json={"symbols": {"tickers": symbols},
+                  "columns": ["close", "change", "change_abs", "description"]},
+            headers=_HEADERS,
+            timeout=20,
+        )
+        out: dict[str, dict] = {}
+        for row in resp.json().get("data", []):
+            d = row.get("d", [])
+            if len(d) < 2 or d[0] is None:
+                continue
+            out[row["s"]] = {
+                "close": float(d[0]),
+                "change_pct": float(d[1]) if d[1] is not None else 0.0,
+                "change_abs": float(d[2]) if len(d) > 2 and d[2] is not None else 0.0,
+                "desc": d[3] if len(d) > 3 else "",
+            }
+        return out
+    except Exception as exc:
+        logger.warning(f"[TV-Quote] gagal: {type(exc).__name__}: {exc}")
+        return {}
+
+
 def get_index_quote(symbol: str = "IDX:COMPOSITE") -> Optional[dict]:
     """
     Level IHSG terkini dari TradingView.

@@ -20,7 +20,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from config import BASE_DIR, DEFAULT_TICKERS
@@ -143,6 +143,142 @@ def build_index() -> dict[str, Any]:
         "as_of": as_of.strftime("%d %b"),
         "source": source,
     }
+
+
+# ── Pasar global ──────────────────────────────────────────────────────────────
+# Dipilih mengikuti apa yang benar-benar menggerakkan IHSG dan yang dibahas
+# jurnal mentor: kurs, dolar, minyak, emas, plus tiga komoditas ekspor utama.
+# Yang punya riwayat di Yahoo dapat sparkline; batu bara, CPO, dan nikel
+# tidak ada di Yahoo sehingga diambil dari TradingView — hanya angka.
+MARKETS_YF = [
+    {"name": "USD/IDR",  "sym": "IDR=X",      "dec": 0, "invert": True},
+    {"name": "DXY",      "sym": "DX-Y.NYB",   "dec": 2, "invert": True},
+    {"name": "Brent",    "sym": "BZ=F",       "dec": 2, "invert": False},
+    {"name": "Emas",     "sym": "GC=F",       "dec": 0, "invert": False},
+]
+MARKETS_TV = [
+    {"name": "Batu bara", "sym": "ICEEUR:ATW1!", "dec": 2},
+    {"name": "CPO",       "sym": "MYX:FCPO1!",   "dec": 0},
+    {"name": "Nikel",     "sym": "LME:NI1!",     "dec": 0},
+]
+
+
+def build_markets() -> list[dict[str, Any]]:
+    """
+    Pasar global yang memengaruhi IHSG.
+
+    `invert` menandai instrumen yang kenaikannya justru menekan IHSG
+    (rupiah melemah, dolar menguat) supaya warnanya tidak menyesatkan:
+    di papan ini hijau selalu berarti "bagus untuk IHSG", bukan "naik".
+    """
+    import yfinance as yf
+    from utils.tradingview_ta import get_quotes
+
+    out: list[dict[str, Any]] = []
+
+    for m in MARKETS_YF:
+        try:
+            h = yf.Ticker(m["sym"]).history(period="3mo", auto_adjust=True)
+            h = h[h["Close"].notna()]
+            if len(h) < 2:
+                continue
+            c = h["Close"]
+            last, prev = float(c.iloc[-1]), float(c.iloc[-2])
+            out.append({
+                "name": m["name"],
+                "last": round(last, m["dec"]),
+                "change_pct": round((last - prev) / prev * 100, 2),
+                "dec": m["dec"],
+                "invert": m["invert"],
+                "spark": [round(float(x), 4) for x in c.tail(30)],
+                "as_of": h.index[-1].strftime("%d %b"),
+            })
+        except Exception as exc:
+            logger.debug(f"[snapshot] market {m['sym']}: {exc}")
+
+    quotes = get_quotes([m["sym"] for m in MARKETS_TV])
+    for m in MARKETS_TV:
+        q = quotes.get(m["sym"])
+        if not q:
+            continue
+        out.append({
+            "name": m["name"],
+            "last": round(q["close"], m["dec"]),
+            "change_pct": round(q["change_pct"], 2),
+            "dec": m["dec"],
+            "invert": False,
+            "spark": [],          # TradingView scanner tidak memberi riwayat
+            "as_of": "",
+        })
+
+    logger.info(f"[snapshot] pasar global: {len(out)} instrumen")
+    return out
+
+
+# ── Fundamental emiten ────────────────────────────────────────────────────────
+
+def _sane(value: Any, lo: float, hi: float) -> Optional[float]:
+    """
+    Loloskan angka hanya bila masuk akal.
+
+    yfinance memulangkan PBV di atas 5.000 untuk sebagian emiten .JK —
+    nilai bukunya dilaporkan dalam satuan berbeda dari harganya. Tanpa
+    penjaga ini papan akan menampilkan "PBV 6.685x" seolah itu fakta.
+    """
+    if not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):    # NaN / inf
+        return None
+    return v if lo <= v <= hi else None
+
+
+def build_fundamentals(tickers: list[str]) -> list[dict[str, Any]]:
+    """Rasio kunci per emiten. Di-cache 24 jam — angkanya jarang berubah."""
+    import yfinance as yf
+    from utils.agent_cache import get as cache_get, set as cache_set
+
+    out: list[dict[str, Any]] = []
+    for code in tickers:
+        key = f"fundamental:web2:{code}"
+        cached = cache_get(key, ttl=24 * 3600)
+        if cached:
+            out.append(cached)
+            continue
+
+        try:
+            info = yf.Ticker(f"{code}.JK").info or {}
+        except Exception as exc:
+            logger.debug(f"[snapshot] fundamental {code}: {exc}")
+            continue
+
+        der = _sane(info.get("debtToEquity"), 0, 1000)
+        roe = _sane(info.get("returnOnEquity"), -5, 5)
+        npm = _sane(info.get("profitMargins"), -5, 5)
+        rev = _sane(info.get("revenueGrowth"), -5, 20)
+        mcap = _sane(info.get("marketCap"), 1e9, 1e16)
+
+        per = _sane(info.get("trailingPE"), 0, 500)
+        pbv = _sane(info.get("priceToBook"), 0, 100)
+        divy = _sane(info.get("dividendYield"), 0, 100)
+
+        row = {
+            "ticker": code,
+            "sector": info.get("sector") or "",
+            "per":  round(per, 1) if per is not None else None,
+            "pbv":  round(pbv, 2) if pbv is not None else None,
+            "roe":  round(roe * 100, 1) if roe is not None else None,
+            "der":  round(der / 100, 2) if der is not None else None,   # % -> x
+            "divy": round(divy, 1) if divy is not None else None,
+            "npm":  round(npm * 100, 1) if npm is not None else None,
+            "rev":  round(rev * 100, 1) if rev is not None else None,
+            "mcap": round(mcap / 1e12, 1) if mcap is not None else None,
+        }
+        cache_set(key, row)
+        out.append(row)
+
+    logger.info(f"[snapshot] fundamental: {len(out)} emiten")
+    return out
 
 
 def build_tape() -> list[dict[str, Any]]:
@@ -379,6 +515,8 @@ def build(include_journal: bool = False) -> dict[str, Any]:
     macro = build_macro()
     news  = build_news()
     runs  = build_runs()
+    markets = build_markets()
+    fundamentals = build_fundamentals([s["ticker"] for s in signals])
     journal = attach_journal(signals) if include_journal else {}
 
     sources = [
@@ -406,6 +544,8 @@ def build(include_journal: bool = False) -> dict[str, Any]:
         "runs": runs,
         "backtest": {"period": BACKTEST_PERIOD, "rows": BACKTEST},
         "sources": sources,
+        "markets": markets,
+        "fundamentals": fundamentals,
         "journal": journal,
     }
 
