@@ -704,6 +704,33 @@ footer .num { color: var(--ink-2); }
 .fundtable tr.detail .meta { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .fundtable tr.detail .meta.old { color: var(--serious); }
 
+/* ─── Kalender laporan & kaitan komoditas ───────────────────────────── */
+.cal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.cal-grid > div {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+}
+.cal-grid .tk { font-family: var(--mono); font-weight: 600; font-size: var(--step-0); }
+.cal-grid .when { font-size: 11px; color: var(--ink-2); }
+.cal-grid .run {
+  margin-left: auto; font-family: var(--mono); font-size: var(--step--1);
+  font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.cal-note { padding: 10px 14px; font-size: 11px; color: var(--ink-3); line-height: 1.5; }
+
+.cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.cmd-grid > div {
+  padding: 9px 14px; border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.cmd-grid .tk { font-family: var(--mono); font-weight: 600; }
+.cmd-grid .cm { font-size: 11px; color: var(--ink-3); }
+.cmd-grid .r {
+  margin-left: auto; font-family: var(--mono); font-size: var(--step--1);
+  font-variant-numeric: tabular-nums; font-weight: 600;
+}
+.cmd-grid .r.weak { color: var(--ink-3); font-weight: 400; }
+
 /* ─── Rail berita berhalaman ────────────────────────────────────────── */
 .rail { position: sticky; top: 78px; }
 .news-nav { display: flex; align-items: center; gap: 4px; margin-left: auto; }
@@ -912,6 +939,28 @@ footer .num { color: var(--ink-2); }
       </div>
     </div>
 
+    <section class="card" id="calCard" hidden>
+      <div class="card-h"><h2>Laporan yang akan datang</h2><span class="spacer"></span>
+        <span class="label" id="calMeta">&mdash;</span></div>
+      <div class="cal-grid" id="cal"></div>
+      <div class="cal-note">
+        Dasarnya studi 440 pengumuman, 28 emiten, 8 tahun. Yang memisahkan hasil
+        bukan besar kejutan labanya &mdash; korelasi kejutan terhadap return t+10 hanya
+        +0,004 &mdash; melainkan seberapa jauh harga sudah lari sebelum rilis.
+        Kejutan positif yang harganya <b>sudah naik &gt;15%</b> rata-rata
+        <b>&minus;1,9%</b> pada t+10 (32% naik); yang justru turun dulu
+        <b>+3,2%</b> (62% naik). Papan tidak menebak labanya, hanya mengingatkan
+        posisinya.
+      </div>
+    </section>
+
+    <section class="card" id="cmdCard" hidden>
+      <div class="card-h"><h2>Kaitan pendapatan dengan harga komoditas</h2>
+        <span class="spacer"></span><span class="label" id="cmdMeta">&mdash;</span></div>
+      <div class="cmd-grid" id="cmd"></div>
+      <div class="cal-note" id="cmdNote"></div>
+    </section>
+
     <section class="card agents">
       <div class="card-h"><h2>Kesehatan sistem</h2><span class="spacer"></span>
         <span class="label" id="agentsMeta">&mdash;</span></div>
@@ -976,6 +1025,7 @@ function render(d) {
   markets(d.markets);
   signals(d.signals, d.fundamentals);
   backtest(d.backtest); news(d.news); agents(d.runs, d.sources);
+  calendar(d.calendar); commodity(d.commodity);
 }
 
 /* ── Header ───────────────────────────────────────────────────────────── */
@@ -1496,6 +1546,73 @@ function news(rows) {
   }, {passive: true});
 
   show(0);
+}
+
+/* ── Kalender laporan ─────────────────────────────────────────────────
+   Papan tidak menebak labanya. Studi 440 pengumuman menunjukkan kejutan
+   laba nyaris tidak berkorelasi dengan return (+0,004 pada t+10), sedang
+   lari-harga-sebelum-rilis konsisten berkorelasi negatif (−0,138). Jadi
+   yang ditandai adalah posisinya, bukan ramalan angkanya.            */
+function calendar(rows) {
+  rows = rows || [];
+  if (!rows.length) return;
+  el("calCard").hidden = false;
+  const risky = rows.filter(r => r.risk === "critical").length;
+  el("calMeta").textContent =
+    rows.length + " emiten" + (risky ? " · " + risky + " perlu hati-hati" : "");
+
+  el("cal").innerHTML = rows.map(r =>
+    '<div title="' + esc(r.note) + '">' +
+      '<span class="dot ' + esc(r.risk) + '"></span>' +
+      '<span class="tk">' + esc(r.ticker) + "</span>" +
+      '<span class="when">' +
+        (r.days === 0 ? "hari ini" : r.days === 1 ? "besok" : r.days + " hari") +
+      "</span>" +
+      '<span class="run ' + (r.run >= 0 ? "up" : "down") + '">' +
+        pct(r.run) + "</span>" +
+    "</div>").join("");
+}
+
+/* ── Kaitan pendapatan dengan harga komoditas ─────────────────────────
+   Gagasannya: pendapatan emiten komoditas mestinya mengikuti harga
+   komoditasnya, jadi harga hari ini bisa jadi petunjuk pendapatan
+   kuartal berjalan. Kenyataannya yfinance hanya memberi 5-6 kuartal —
+   terlalu sedikit untuk regresi yang bisa dipertanggungjawabkan.
+   Karena itu yang ditampilkan hanya KEKUATAN hubungannya, dan proyeksi
+   baru dikeluarkan bila |r| >= 0,6 dengan minimal 5 titik.           */
+function commodity(rows) {
+  rows = rows || [];
+  if (!rows.length) return;
+  el("cmdCard").hidden = false;
+
+  const withProj = rows.filter(r => r.proj != null).length;
+  el("cmdMeta").textContent =
+    rows.length + " emiten" + (withProj ? " · " + withProj + " punya proyeksi" : "");
+
+  el("cmd").innerHTML = rows.map(r => {
+    const weak = r.r == null || Math.abs(r.r) < 0.6;
+    return "<div>" +
+      '<span class="tk">' + esc(r.ticker) + "</span>" +
+      '<span class="cm">' + esc(r.commodity) + " · n=" + r.n + "</span>" +
+      '<span class="r' + (weak ? " weak" : "") + '">r ' +
+        (r.r == null ? "—" : nf2(r.r)) + "</span>" +
+      (r.proj != null
+        ? '<span class="cm">proyeksi ' + nf2(r.proj) + " T</span>"
+        : "") +
+    "</div>";
+  }).join("");
+
+  el("cmdNote").innerHTML = withProj
+    ? "Proyeksi dihitung dari regresi pendapatan kuartalan terhadap rata-rata " +
+      "harga komoditas kuartal yang sama. Perlakukan sebagai indikasi, bukan angka pasti."
+    : "<b>Belum ada emiten yang hubungannya cukup kuat untuk diproyeksikan.</b> " +
+      "yfinance hanya memberi 5&ndash;6 kuartal per emiten, dan pada n sekecil itu " +
+      "r&nbsp;=&nbsp;0,7 pun belum bermakna secara statistik. Batu bara, CPO, dan nikel " +
+      "bahkan tidak bisa diuji sama sekali: seri harganya tidak tersedia lengkap " +
+      "(batu bara berhenti Desember 2025; CPO dan nikel tidak ada riwayatnya di Yahoo) " +
+      "&mdash; padahal justru kelompok itu yang terbanyak di watchlist. " +
+      "Angka r di atas tetap berguna sebagai penunjuk emiten mana yang bergerak " +
+      "mengikuti komoditasnya.";
 }
 
 /* ── Kesehatan sistem di kaki halaman ─────────────────────────────────

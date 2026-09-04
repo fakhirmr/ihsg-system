@@ -26,7 +26,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Naik dari 25: scan fundamental 58 emiten + kalender laporan
+    # menambah ~4 menit saat cache dingin.
+    timeout-minutes: 40
 
     # Runner GitHub default UTC; semua jadwal di kode ini WIB
     env:

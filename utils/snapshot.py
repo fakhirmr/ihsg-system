@@ -331,6 +331,25 @@ def _pct_change(now: Any, before: Any) -> Optional[float]:
     return (now - before) / abs(before) * 100
 
 
+def _usdidr() -> float:
+    """Kurs USD/IDR terkini, di-cache 12 jam. Jatuh ke 16.500 bila gagal."""
+    from utils.agent_cache import get as cache_get, set as cache_set
+    hit = cache_get("fx:usdidr", ttl=12 * 3600)
+    if hit and hit.get("rate"):
+        return float(hit["rate"])
+    try:
+        import yfinance as yf
+        h = yf.Ticker("IDR=X").history(period="5d", auto_adjust=True)
+        h = h[h["Close"].notna()]
+        rate = float(h["Close"].iloc[-1])
+        if 5000 < rate < 50000:
+            cache_set("fx:usdidr", {"rate": rate})
+            return rate
+    except Exception as exc:
+        logger.warning(f"[snapshot] kurs USD/IDR gagal: {exc}")
+    return 16500.0
+
+
 def _parse_json(raw: str) -> dict[str, Any]:
     """Ambil objek JSON dari balasan LLM; {} kalau gagal."""
     clean = raw.strip()
@@ -406,10 +425,11 @@ def build_fundamental_scan(
             tk = yf.Ticker(f"{code}.JK")
 
             # ── Rasio valuasi ────────────────────────────────────────
-            rkey = f"ratio:{code}"
+            rkey = f"ratio2:{code}"
             row = cache_get(rkey, ttl=24 * 3600)
             if not row:
                 info = tk.info or {}
+                fin_cur = (info.get("financialCurrency") or "IDR").upper()
                 der  = _sane(info.get("debtToEquity"), 0, 1000)
                 roe  = _sane(info.get("returnOnEquity"), -5, 5)
                 npm  = _sane(info.get("profitMargins"), -5, 5)
@@ -421,6 +441,7 @@ def build_fundamental_scan(
                 row = {
                     "ticker": code,
                     "sector": info.get("sector") or "",
+                    "fin_cur": fin_cur,
                     "name":   info.get("longName") or code,
                     "per":  round(per, 1) if per is not None else None,
                     "pbv":  round(pbv, 2) if pbv is not None else None,
@@ -443,25 +464,47 @@ def build_fundamental_scan(
                 yoy = next((c for c in cols
                             if c.month == last.month and c.year == last.year - 1), None)
                 period = f"Q{(last.month - 1) // 3 + 1} {last.year}"
-                ekey = f"earnings2:{code}:{last.strftime('%Y%m%d')}"
 
+                # 25 dari 58 emiten watchlist melaporkan keuangan dalam USD
+                # (ADRO, ITMG, MEDC, INCO, AMMN, ...). Tanpa konversi,
+                # pendapatan ADRO 470,9 juta USD dibagi 1e12 menjadi
+                # "0,00 T" dan LLM setia menulis bahwa pendapatannya nol.
+                fx = _usdidr() if row.get("fin_cur") == "USD" else 1.0
+                ekey = f"earnings3:{code}:{last.strftime('%Y%m%d')}"
+
+                # Baris cache yang angkanya nol diperlakukan seolah TIDAK ADA
+                # cache, bukan sekadar ditolak. Kalau hanya ditolak, cabang
+                # penulisan ulang (yang mensyaratkan "belum ada cache") tidak
+                # pernah jalan dan baris itu macet selamanya — persis yang
+                # terjadi pada emiten pelapor USD sebelum konversi diperbaiki.
                 cached = cache_get(ekey, ttl=120 * 24 * 3600)
-                if cached and (cached.get("revenue") or cached.get("net_income")):
+                if cached and not (cached.get("revenue") or cached.get("net_income")):
+                    cached = None
+
+                if cached:
                     row.update(cached)
-                elif not cached and budget > 0 and not rate_limited:
+                elif budget > 0 and not rate_limited:
                     qb = tk.quarterly_balance_sheet
-                    rev_f = lambda c: pick(qf, ["Total Revenue", "Operating Revenue"], c)
-                    net_f = lambda c: pick(qf, ["Net Income", "Net Income Common Stockholders"], c)
+
+                    def _fx(v: Any) -> Any:
+                        return v * fx if isinstance(v, (int, float)) and v == v else v
+
+                    rev_f = lambda c: _fx(pick(qf, ["Total Revenue", "Operating Revenue"], c))
+                    net_f = lambda c: _fx(pick(qf, ["Net Income", "Net Income Common Stockholders"], c))
                     rev_now, net_now = rev_f(last), net_f(last)
 
                     # Emiten yang baru IPO belum punya angka apa pun.
                     if rev_now or net_now:
-                        opi_now = pick(qf, ["Operating Income"], last)
+                        opi_now = _fx(pick(qf, ["Operating Income"], last))
                         npm_q = (net_now / rev_now * 100) if rev_now and net_now else None
 
                         facts = [
                             f"Emiten        : {code}",
                             f"Periode       : {period} (per {last.strftime('%d %b %Y')})",
+                            (f"Catatan       : emiten melapor dalam USD; angka di "
+                             f"bawah sudah dikonversi ke rupiah pada kurs "
+                             f"{fx:,.0f}/USD" if fx != 1.0 else
+                             "Catatan       : emiten melapor dalam rupiah"),
                             f"Pendapatan    : {_fmt_t(rev_now)}",
                             f"Laba operasi  : {_fmt_t(opi_now)}",
                             f"Laba bersih   : {_fmt_t(net_now)}",
@@ -484,10 +527,10 @@ def build_fundamental_scan(
                                 facts.append(f"  laba bersih {d:+.1f}%")
                         if qb is not None and not qb.empty and last in qb.columns:
                             facts += [
-                                f"Total aset    : {_fmt_t(pick(qb, ['Total Assets'], last))}",
-                                f"Total utang   : {_fmt_t(pick(qb, ['Total Debt'], last))}",
-                                f"Ekuitas       : {_fmt_t(pick(qb, ['Stockholders Equity'], last))}",
-                                f"Kas           : {_fmt_t(pick(qb, ['Cash And Cash Equivalents'], last))}",
+                                f"Total aset    : {_fmt_t(_fx(pick(qb, ['Total Assets'], last)))}",
+                                f"Total utang   : {_fmt_t(_fx(pick(qb, ['Total Debt'], last)))}",
+                                f"Ekuitas       : {_fmt_t(_fx(pick(qb, ['Stockholders Equity'], last)))}",
+                                f"Kas           : {_fmt_t(_fx(pick(qb, ['Cash And Cash Equivalents'], last)))}",
                             ]
 
                         # Retry dimatikan: yang mahal bukan penolakannya,
@@ -541,6 +584,202 @@ def build_fundamental_scan(
         f"{with_review} punya ulasan, {len(out) - with_review} menyusul "
         f"({max_new_reviews - budget} ditulis run ini"
         + (", berhenti karena kuota LLM)" if rate_limited else ")")
+    )
+    return out
+
+
+# ── Kalender laporan + peringatan "sudah priced in" ───────────────────────────
+#
+# Dasarnya studi study_sell_on_news.py: 440 pengumuman, 28 emiten, 8 tahun.
+# Yang memisahkan hasil bukan besar kejutan labanya (korelasi kejutan vs
+# return t+10 hanya +0,004) melainkan seberapa jauh harga SUDAH lari
+# sebelum rilis (korelasi -0,138, konsisten negatif di semua horizon):
+#
+#   kejutan positif, sudah naik >15% dulu  -> t+10  -1,88%  (32% naik)
+#   kejutan positif, justru turun dulu     -> t+10  +3,21%  (62% naik)
+#   kejutan negatif, sudah naik >15% dulu  -> t+1   -2,63%  (13% naik)
+#
+# Karena itu papan tidak menebak labanya. Ia hanya mengingatkan: laporan
+# sebentar lagi, dan harganya sudah lari sejauh ini.
+
+PRE_WINDOW = 20          # hari bursa yang dihitung sebagai "lari sebelum rilis"
+CALENDAR_HORIZON = 45    # tampilkan laporan yang jatuh dalam sekian hari
+
+
+def build_earnings_calendar(tickers: list[str]) -> list[dict[str, Any]]:
+    """Laporan yang akan datang + seberapa jauh harga sudah bergerak."""
+    import yfinance as yf
+    import pandas as pd
+    from utils.agent_cache import get as cache_get, set as cache_set
+
+    today = _now().date()
+    out: list[dict[str, Any]] = []
+
+    for code in tickers:
+        try:
+            key = f"earndate:{code}"
+            nxt = cache_get(key, ttl=12 * 3600)
+            if nxt is None:
+                tk = yf.Ticker(f"{code}.JK")
+                ed = tk.earnings_dates
+                nxt = {"date": None}
+                if ed is not None and not ed.empty:
+                    future = [pd.Timestamp(t).tz_localize(None).date()
+                              for t in ed.index]
+                    future = sorted(d for d in future if d >= today)
+                    if future:
+                        nxt = {"date": future[0].isoformat()}
+                cache_set(key, nxt)
+
+            if not nxt.get("date"):
+                continue
+            when = datetime.fromisoformat(nxt["date"]).date()
+            days = (when - today).days
+            if days > CALENDAR_HORIZON:
+                continue
+
+            from utils.data_fetcher import fetch_stock_data
+            sd = fetch_stock_data(f"{code}.JK", period="3mo")
+            if not sd.is_valid or len(sd.price_history) < PRE_WINDOW + 1:
+                continue
+            c = sd.price_history["Close"].dropna()
+            run = (float(c.iloc[-1]) - float(c.iloc[-1 - PRE_WINDOW])) \
+                / float(c.iloc[-1 - PRE_WINDOW]) * 100
+
+            if run > 15:
+                risk, note = "critical", "sudah lari jauh — kelompok ini historis t+10 −1,9%"
+            elif run > 5:
+                risk, note = "warning", "sudah naik sedang"
+            elif run < -5:
+                risk, note = "good", "justru turun dulu — kelompok ini historis t+10 +3,2%"
+            else:
+                risk, note = "idle", "bergerak datar"
+
+            out.append({
+                "ticker": code, "date": nxt["date"], "days": days,
+                "run": round(run, 1), "risk": risk, "note": note,
+                "price": round(sd.current_price),
+            })
+        except Exception as exc:
+            logger.debug(f"[snapshot] kalender {code}: {exc}")
+
+    out.sort(key=lambda r: (r["days"], -abs(r["run"])))
+    logger.info(f"[snapshot] kalender laporan: {len(out)} emiten dalam {CALENDAR_HORIZON} hari")
+    return out
+
+
+# ── Kaitan pendapatan dengan harga komoditas ──────────────────────────────────
+#
+# Hanya komoditas yang punya riwayat DAN masih ter-update yang dipakai.
+# Batu bara (MTF=F) berhenti Desember 2025, CPO dan nikel tidak ada sama
+# sekali di Yahoo — padahal justru itu yang paling banyak di watchlist.
+# Kelompok-kelompok itu sengaja TIDAK diproyeksikan daripada memakai
+# angka basi yang terlihat meyakinkan.
+
+COMMODITY_SERIES = {
+    "brent":   {"sym": "BZ=F", "label": "Brent"},
+    "wti":     {"sym": "CL=F", "label": "WTI"},
+    "gas":     {"sym": "NG=F", "label": "Gas alam"},
+    "emas":    {"sym": "GC=F", "label": "Emas"},
+    "tembaga": {"sym": "HG=F", "label": "Tembaga"},
+}
+
+# Penggerak utama pendapatan tiap emiten
+TICKER_COMMODITY = {
+    "MEDC": "brent", "ELSA": "brent", "ENRG": "brent", "PGAS": "gas",
+    "ESSA": "gas",   "RAJA": "gas",
+    "PSAB": "emas",  "ARCI": "emas",  "ANTM": "emas",
+    "MDKA": "tembaga", "AMMN": "tembaga",
+}
+
+MIN_POINTS = 5           # titik kuartal minimum untuk berani menghitung
+
+# PROYEKSI PENDAPATAN SENGAJA TIDAK DIKELUARKAN.
+# yfinance hanya memberi 5-6 kuartal per emiten. Pada n=5, r=0,74 pun
+# belum bermakna secara statistik (p sekitar 0,15) — regresi dari lima
+# titik akan menghasilkan angka yang terlihat pasti padahal tidak.
+# Yang ditampilkan hanya KEKUATAN hubungan (r dan n), yang tetap berguna
+# untuk tahu emiten mana bergerak mengikuti komoditasnya.
+
+
+def build_commodity_link(tickers: list[str]) -> list[dict[str, Any]]:
+    """
+    Hubungan pendapatan kuartalan dengan rata-rata harga komoditas kuartal
+    yang sama, plus proyeksi kasar untuk kuartal berjalan.
+
+    PERINGATAN YANG MELEKAT: yfinance hanya memberi 5-6 kuartal, jadi
+    regresinya bersandar pada sedikit titik. Karena itu n dan koefisien
+    korelasi selalu ikut ditampilkan, dan proyeksi hanya dikeluarkan bila
+    |r| >= 0,6 dengan minimal 5 titik. Selebihnya dilaporkan apa adanya
+    sebagai "hubungan tidak cukup kuat".
+    """
+    import yfinance as yf
+    import pandas as pd
+    import numpy as np
+
+    codes = [c for c in tickers if c in TICKER_COMMODITY]
+    if not codes:
+        return []
+
+    # Ambil tiap seri komoditas sekali saja
+    series: dict[str, Any] = {}
+    for key, meta in COMMODITY_SERIES.items():
+        try:
+            h = yf.Ticker(meta["sym"]).history(period="6y", auto_adjust=True)
+            h = h[h["Close"].notna()]
+            if len(h) > 200:
+                s = h["Close"]
+                s.index = s.index.tz_localize(None)
+                series[key] = s
+        except Exception as exc:
+            logger.debug(f"[snapshot] komoditas {key}: {exc}")
+
+    out: list[dict[str, Any]] = []
+    for code in codes:
+        ckey = TICKER_COMMODITY[code]
+        s = series.get(ckey)
+        if s is None:
+            continue
+        try:
+            qf = yf.Ticker(f"{code}.JK").quarterly_financials
+            if qf is None or qf.empty:
+                continue
+            names = [n for n in ("Total Revenue", "Operating Revenue") if n in qf.index]
+            if not names:
+                continue
+            rev_row = qf.loc[names[0]]
+
+            xs, ys, labels = [], [], []
+            for col in qf.columns:
+                v = rev_row.get(col)
+                if not isinstance(v, (int, float)) or v != v:
+                    continue
+                end = pd.Timestamp(col).tz_localize(None)
+                start = end - pd.Timedelta(days=90)
+                win = s[(s.index > start) & (s.index <= end)]
+                if len(win) < 30:
+                    continue
+                xs.append(float(win.mean()))
+                ys.append(float(v) / 1e12)
+                labels.append(f"Q{(end.month - 1) // 3 + 1} {end.year}")
+
+            row = {
+                "ticker": code,
+                "commodity": COMMODITY_SERIES[ckey]["label"],
+                "n": len(xs),
+                "r": None,
+            }
+            if len(xs) >= MIN_POINTS:
+                row["r"] = round(float(np.corrcoef(xs, ys)[0, 1]), 2)
+            out.append(row)
+        except Exception as exc:
+            logger.debug(f"[snapshot] kaitan komoditas {code}: {exc}")
+
+    out.sort(key=lambda r: -(abs(r["r"]) if r["r"] else 0))
+    strong = sum(1 for r in out if r["r"] and abs(r["r"]) >= 0.6)
+    logger.info(
+        f"[snapshot] kaitan komoditas: {len(out)} emiten, "
+        f"{strong} berhubungan kuat (tanpa proyeksi — n terlalu sedikit)"
     )
     return out
 
@@ -783,7 +1022,10 @@ def build(include_journal: bool = False) -> dict[str, Any]:
     # Scan fundamental menyeluruh: SELURUH watchlist, bukan hanya yang
     # memunculkan sinyal hari ini — tab Fundamental menampilkan peringkat
     # penuh, dan slip mengambil barisnya dari daftar yang sama.
-    fundamentals = build_fundamental_scan([t.replace(".JK", "") for t in DEFAULT_TICKERS])
+    codes = [t.replace(".JK", "") for t in DEFAULT_TICKERS]
+    fundamentals = build_fundamental_scan(codes)
+    calendar = build_earnings_calendar(codes)
+    commodity = build_commodity_link(codes)
     journal = attach_journal(signals) if include_journal else {}
 
     sources = [
@@ -813,6 +1055,8 @@ def build(include_journal: bool = False) -> dict[str, Any]:
         "sources": sources,
         "markets": markets,
         "fundamentals": fundamentals,
+        "calendar": calendar,
+        "commodity": commodity,
         "journal": journal,
     }
 
