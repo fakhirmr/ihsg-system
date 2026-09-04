@@ -90,6 +90,11 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Atribut `hidden` kalah oleh `display` yang ditulis eksplisit —
+   .tickets memakai `display: grid`, sehingga slip tetap tampil saat
+   tab Fundamental aktif. Aturan ini membuat `hidden` selalu menang. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--ground);
@@ -663,6 +668,42 @@ footer .num { color: var(--ink-2); }
 .fx-grid .v.na { color: var(--ink-3); font-weight: 400; }
 .fx-grid .v.good { color: var(--naik); }
 
+/* ─── Tabel peringkat fundamental ───────────────────────────────────── */
+.fundtable th, .fundtable td { padding: 7px 10px; }
+.fundtable td { border-bottom: 1px solid var(--rule); }
+.fundtable tbody tr.row { cursor: pointer; }
+.fundtable tbody tr.row:hover { background: var(--surface-2); }
+.fundtable tbody tr.row.open { background: var(--accent-wash); }
+.fundtable .rk { color: var(--ink-3); font-family: var(--mono); }
+.fundtable .kode {
+  font-family: var(--mono); font-weight: 600;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.fundtable .kode .caret { color: var(--ink-3); transition: transform .15s; font-size: 11px; }
+.fundtable tr.open .kode .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .fundtable .caret { transition: none; } }
+.fundtable .sec { font-size: 10px; color: var(--ink-3); font-weight: 400; }
+
+/* Skor: angka + bilah, keduanya. Bilah saja tidak bisa dibaca presisi,
+   angka saja tidak bisa dipindai cepat. */
+.skor { display: flex; align-items: center; gap: 7px; justify-content: flex-end; }
+.skor .n { font-family: var(--mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.skor .bar { width: 46px; height: 6px; border-radius: 2px; background: var(--surface-2); flex: none; }
+.skor .bar span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.skor .cov { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+.vdcell { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.vdcell.kuat, .vdcell.sehat { color: var(--naik); }
+.vdcell.lemah { color: var(--turun); }
+.vdcell.na { color: var(--ink-3); font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+.fundtable tr.detail td { background: var(--surface-2); }
+.fundtable tr.detail p { margin: 0 0 5px; font-size: var(--step--1); color: var(--ink-2); line-height: 1.55; }
+.fundtable tr.detail ul { margin: 0 0 5px; padding-left: 15px; }
+.fundtable tr.detail li { font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+.fundtable tr.detail .meta { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.fundtable tr.detail .meta.old { color: var(--serious); }
+
 /* ─── Rail berita berhalaman ────────────────────────────────────────── */
 .rail { position: sticky; top: 78px; }
 .news-nav { display: flex; align-items: center; gap: 4px; margin-left: auto; }
@@ -775,7 +816,7 @@ footer .num { color: var(--ink-2); }
     <div class="cols">
       <main>
         <div class="sect">
-          <h2>Slip sinyal</h2>
+          <h2 id="mainTitle">Slip sinyal</h2>
           <span class="count" id="shown">—</span>
           <span class="spacer"></span>
           <div class="controls">
@@ -784,13 +825,47 @@ footer .num { color: var(--ink-2); }
               <button type="button" data-f="RADAR" aria-pressed="false">Radar</button>
               <button type="button" data-f="BREAKOUT" aria-pressed="false">Breakout</button>
               <button type="button" data-f="WEAKNESS" aria-pressed="false">Weakness</button>
+              <button type="button" data-f="FUND" aria-pressed="false">Fundamental</button>
             </div>
             <input type="search" id="q" placeholder="Kode…" aria-label="Cari kode saham">
           </div>
         </div>
 
         <div class="tickets" id="tickets"></div>
-        <div class="empty" id="empty" hidden>Tidak ada sinyal yang cocok.</div>
+
+        <div class="card fundview" id="fundView" hidden>
+          <div class="tablewrap">
+            <table class="fundtable">
+              <thead>
+                <tr>
+                  <th scope="col">#</th>
+                  <th scope="col">Kode</th>
+                  <th scope="col">Skor</th>
+                  <th scope="col">PER</th>
+                  <th scope="col">PBV</th>
+                  <th scope="col">ROE</th>
+                  <th scope="col">DER</th>
+                  <th scope="col">Div</th>
+                  <th scope="col">Growth</th>
+                  <th scope="col">Laporan</th>
+                </tr>
+              </thead>
+              <tbody id="fundBody"></tbody>
+            </table>
+          </div>
+          <div class="card-b" style="border-top:1px solid var(--rule)">
+            <div class="warnbox">
+              <span class="ic" aria-hidden="true">&#9650;</span>
+              <span><b>Skor ini heuristik papan ini, bukan ukuran baku.</b>
+              Gabungan ROE&nbsp;25, PER&nbsp;20, PBV&nbsp;15, marjin&nbsp;10, pertumbuhan&nbsp;10,
+              dividen&nbsp;10, dan utang&nbsp;10 — dinilai dengan ambang absolut, bukan peringkat
+              relatif. Komponen yang datanya kosong dikeluarkan dari penyebut, jadi perhatikan
+              kolom cakupan sebelum membandingkan dua emiten. Klik baris untuk ulasan laporannya.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="empty" id="empty" hidden>Tidak ada yang cocok.</div>
       </main>
 
       <aside class="rail">
@@ -899,7 +974,7 @@ function render(d) {
   header(d); tape(d.tape); index(d.index); tiles(d);
   journalBar(d.journal);
   markets(d.markets);
-  signals(d.signals, d.earnings, d.fundamentals);
+  signals(d.signals, d.fundamentals);
   backtest(d.backtest); news(d.news); agents(d.runs, d.sources);
 }
 
@@ -1205,16 +1280,63 @@ function ticketHTML(s, e, f, idx) {
   "</article>";
 }
 
-function signals(rows, earn, funds) {
-  rows = rows || [];
-  const eBy = {}, fBy = {};
-  (earn  || []).forEach(x => { eBy[x.ticker] = x; });
-  (funds || []).forEach(x => { fBy[x.ticker] = x; });
+/* ── Tabel peringkat fundamental ──────────────────────────────────────
+   Seluruh watchlist, diurutkan dari skor tertinggi. Skor adalah heuristik
+   papan ini — bukan ukuran baku — sehingga komponennya diberitahukan di
+   kaki tabel dan cakupan datanya ikut ditampilkan per baris. Emiten yang
+   banyak kolomnya kosong bisa terlihat "bagus" hanya karena sedikit yang
+   dinilai; cakupan itulah rem-nya.                                     */
+function fundRows(rows) {
+  const cell = (v, suffix, good) =>
+    '<td class="n' + (v == null ? " na" : "") + '">' +
+    (v == null ? "—" : nfd(v, suffix === "%" ? 1 : 2) + (suffix || "")) + "</td>";
+
+  return rows.map(r => {
+    const vd = r.verdict || "";
+    const old = r.stale_days > 120;
+    const detail = r.narrative
+      ? '<tr class="detail" data-t="' + esc(r.ticker) + '" hidden><td colspan="10">' +
+          "<p>" + esc(r.narrative) + "</p>" +
+          (r.highlights && r.highlights.length
+            ? "<ul>" + r.highlights.map(h => "<li>" + esc(h) + "</li>").join("") + "</ul>" : "") +
+          '<span class="meta' + (old ? " old" : "") + '">' + (old ? "▲ " : "") +
+            esc(r.period || "") + " · per " + esc(r.as_of || "—") +
+            " · " + (r.stale_days != null ? r.stale_days + " hari lalu" : "") +
+            (r.mcap != null ? " · kapitalisasi " + nfd(r.mcap, 1) + " T" : "") +
+          "</span></td></tr>"
+      : '<tr class="detail" data-t="' + esc(r.ticker) + '" hidden><td colspan="10">' +
+          '<span class="meta">Ulasan naratif belum ditulis. Kuota LLM dipakai bertahap ' +
+          'tiap papan dibangun ulang, jadi baris ini terisi sendiri dalam beberapa jam. ' +
+          'Rasio dan skor di atas sudah final.</span>' +
+        "</td></tr>";
+
+    return '<tr class="row" data-t="' + esc(r.ticker) + '">' +
+      '<td class="rk">' + r.rank + "</td>" +
+      '<td><span class="kode"><span class="caret" aria-hidden="true">›</span>' +
+        esc(r.ticker) + '<span class="sec">' + esc(r.sector || "") + "</span></span></td>" +
+      '<td class="n"><div class="skor">' +
+        '<span class="cov">' + r.coverage + "%</span>" +
+        '<span class="bar"><span style="width:' + r.score + '%"></span></span>' +
+        '<span class="n">' + r.score + "</span></div></td>" +
+      cell(r.per, "x") + cell(r.pbv, "x") + cell(r.roe, "%") +
+      cell(r.der, "x") + cell(r.divy, "%") + cell(r.rev, "%") +
+      '<td class="vdcell ' + (vd ? esc(vd.toLowerCase()) : "na") + '">' +
+        esc(vd || (r.narrative ? "—" : "menyusul")) + "</td>" +
+    "</tr>" + detail;
+  }).join("");
+}
+
+function signals(rows, funds) {
+  rows  = rows || [];
+  funds = funds || [];
+  const fBy = {};
+  funds.forEach(x => { fBy[x.ticker] = x; });
 
   el("tickets").innerHTML = rows
-    .map((s, i) => ticketHTML(s, eBy[s.ticker], fBy[s.ticker], i)).join("");
+    .map((s, i) => ticketHTML(s, fBy[s.ticker], fBy[s.ticker], i)).join("");
+  el("fundBody").innerHTML = fundRows(funds);
 
-  /* Buka-tutup narasi fundamental */
+  /* Buka-tutup narasi fundamental di dalam slip */
   el("tickets").addEventListener("click", ev => {
     const btn = ev.target.closest(".fx-head");
     if (!btn) return;
@@ -1225,29 +1347,78 @@ function signals(rows, earn, funds) {
     body.hidden = open;
   });
 
+  /* Buka-tutup baris di tabel peringkat */
+  el("fundBody").addEventListener("click", ev => {
+    const tr = ev.target.closest("tr.row");
+    if (!tr) return;
+    const det = tr.nextElementSibling;
+    if (!det || !det.classList.contains("detail")) return;
+    det.hidden = !det.hidden;
+    tr.classList.toggle("open", !det.hidden);
+  });
+
   const cards = [].slice.call(document.querySelectorAll(".ticket"));
+  const fTrs  = [].slice.call(el("fundBody").querySelectorAll("tr.row"));
   const qEl = el("q");
   const btns = [].slice.call(document.querySelectorAll(".seg button"));
   let kind = "all";
 
   const apply = () => {
     const q = qEl.value.trim().toUpperCase();
-    let vis = 0;
-    cards.forEach(c => {
-      const ok = (kind === "all" || c.dataset.kind === kind) && (!q || c.dataset.t.includes(q));
-      c.classList.toggle("hide", !ok);
-      if (ok) vis++;
-    });
-    el("shown").textContent = vis + " dari " + cards.length;
+    const fundMode = kind === "FUND";
+
+    el("tickets").hidden = fundMode;
+    el("fundView").hidden = !fundMode;
+    el("mainTitle").textContent = fundMode ? "Peringkat fundamental" : "Slip sinyal";
+
+    let vis = 0, total;
+    if (fundMode) {
+      total = fTrs.length;
+      fTrs.forEach(tr => {
+        const ok = !q || tr.dataset.t.includes(q);
+        tr.hidden = !ok;
+        const det = tr.nextElementSibling;
+        if (det && det.classList.contains("detail")) {
+          if (!ok) { det.hidden = true; tr.classList.remove("open"); }
+        }
+        if (ok) vis++;
+      });
+    } else {
+      total = cards.length;
+      cards.forEach(c => {
+        const ok = (kind === "all" || c.dataset.kind === kind) && (!q || c.dataset.t.includes(q));
+        c.classList.toggle("hide", !ok);
+        if (ok) vis++;
+      });
+    }
+    if (fundMode) {
+      const done = funds.filter(f => f.narrative).length;
+      el("shown").textContent = vis + " dari " + total +
+        " · " + done + " sudah diulas" +
+        (total - done ? ", " + (total - done) + " menyusul" : "");
+    } else {
+      el("shown").textContent = vis + " dari " + total;
+    }
     el("empty").hidden = vis > 0;
   };
-  btns.forEach(b => b.addEventListener("click", () => {
-    kind = b.dataset.f;
-    btns.forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+
+  const select = f => {
+    kind = f;
+    btns.forEach(o => o.setAttribute("aria-pressed", String(o.dataset.f === f)));
     apply();
-  }));
+  };
+  btns.forEach(b => b.addEventListener("click", () => select(b.dataset.f)));
   qEl.addEventListener("input", apply);
-  apply();
+
+  /* Tautan langsung: .../#fundamental membuka tab peringkat */
+  const fromHash = () => {
+    const h = (location.hash || "").replace("#", "").toUpperCase();
+    const known = {FUNDAMENTAL: "FUND", RADAR: "RADAR",
+                   BREAKOUT: "BREAKOUT", WEAKNESS: "WEAKNESS"};
+    select(known[h] || "all");
+  };
+  addEventListener("hashchange", fromHash);
+  fromHash();
 }
 
 /* ── Uji balik ────────────────────────────────────────────────────────── */

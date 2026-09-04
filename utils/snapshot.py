@@ -45,6 +45,10 @@ BACKTEST = [
 ]
 BACKTEST_PERIOD = "Apr 2024 – Sep 2026 · 58 saham"
 
+# Ulasan naratif BARU yang boleh ditulis dalam satu run.
+# Lihat catatan di build_fundamental_scan.
+MAX_NEW_REVIEWS = 30
+
 # Jadwal cron tiap workflow, untuk menghitung "berikutnya"
 SCHEDULE = {
     "technical.yml":   {"label": "Technical + Volume", "hint": "tiap 30 mnt · 09:00–15:30"},
@@ -215,7 +219,7 @@ def build_markets() -> list[dict[str, Any]]:
     return out
 
 
-# ── Fundamental emiten ────────────────────────────────────────────────────────
+# ── Fundamental: rasio, skor, dan ulasan naratif ──────────────────────────────
 
 def _sane(value: Any, lo: float, hi: float) -> Optional[float]:
     """
@@ -233,55 +237,55 @@ def _sane(value: Any, lo: float, hi: float) -> Optional[float]:
     return v if lo <= v <= hi else None
 
 
-def build_fundamentals(tickers: list[str]) -> list[dict[str, Any]]:
-    """Rasio kunci per emiten. Di-cache 24 jam — angkanya jarang berubah."""
-    import yfinance as yf
-    from utils.agent_cache import get as cache_get, set as cache_set
+# Skor fundamental — HEURISTIK PAPAN INI, bukan ukuran baku industri.
+# Tiap komponen dipetakan ke 0-1 memakai ambang absolut (bukan peringkat
+# relatif) supaya angkanya stabil dari hari ke hari dan bisa ditelusuri.
+# Format: (kunci, bobot, nilai_terburuk, nilai_terbaik, label)
+# Untuk komponen "makin kecil makin baik", terburuk > terbaik — rumus
+# normalisasinya sama persis.
+SCORE_SPEC = [
+    ("roe",  25,   0.0,  25.0, "ROE"),
+    ("per",  20,  30.0,   5.0, "PER"),
+    ("pbv",  15,   3.0,   0.5, "PBV"),
+    ("npm",  10,   0.0,  30.0, "Marjin"),
+    ("rev",  10, -20.0,  30.0, "Growth"),
+    ("divy", 10,   0.0,   8.0, "Dividen"),
+    ("der",  10,   2.0,   0.0, "Utang"),
+]
 
-    out: list[dict[str, Any]] = []
-    for code in tickers:
-        key = f"fundamental:web2:{code}"
-        cached = cache_get(key, ttl=24 * 3600)
-        if cached:
-            out.append(cached)
+
+def score_fundamental(row: dict[str, Any]) -> dict[str, Any]:
+    """
+    Skor 0-100 dari komponen yang tersedia.
+
+    Komponen yang datanya kosong TIDAK dihitung sebagai nol — bobotnya
+    dikeluarkan dari penyebut. Bank yang tidak melaporkan DER karena itu
+    tidak dihukum; kalau tidak, seluruh sektor keuangan akan tenggelam
+    hanya karena satu kolom kosong.
+    """
+    total_w = 0.0
+    got = 0.0
+    parts: list[dict[str, Any]] = []
+
+    for key, weight, worst, best in [(k, w, lo, hi) for k, w, lo, hi, _ in SCORE_SPEC]:
+        v = row.get(key)
+        if not isinstance(v, (int, float)):
             continue
+        t = (float(v) - worst) / (best - worst)
+        t = max(0.0, min(1.0, t))
+        total_w += weight
+        got += t * weight
+        parts.append({"k": key, "t": round(t, 3)})
 
-        try:
-            info = yf.Ticker(f"{code}.JK").info or {}
-        except Exception as exc:
-            logger.debug(f"[snapshot] fundamental {code}: {exc}")
-            continue
+    if total_w == 0:
+        return {"score": None, "parts": [], "coverage": 0}
 
-        der = _sane(info.get("debtToEquity"), 0, 1000)
-        roe = _sane(info.get("returnOnEquity"), -5, 5)
-        npm = _sane(info.get("profitMargins"), -5, 5)
-        rev = _sane(info.get("revenueGrowth"), -5, 20)
-        mcap = _sane(info.get("marketCap"), 1e9, 1e16)
+    return {
+        "score": round(got / total_w * 100),
+        "parts": parts,
+        "coverage": round(total_w / sum(w for _, w, _, _, _ in SCORE_SPEC) * 100),
+    }
 
-        per = _sane(info.get("trailingPE"), 0, 500)
-        pbv = _sane(info.get("priceToBook"), 0, 100)
-        divy = _sane(info.get("dividendYield"), 0, 100)
-
-        row = {
-            "ticker": code,
-            "sector": info.get("sector") or "",
-            "per":  round(per, 1) if per is not None else None,
-            "pbv":  round(pbv, 2) if pbv is not None else None,
-            "roe":  round(roe * 100, 1) if roe is not None else None,
-            "der":  round(der / 100, 2) if der is not None else None,   # % -> x
-            "divy": round(divy, 1) if divy is not None else None,
-            "npm":  round(npm * 100, 1) if npm is not None else None,
-            "rev":  round(rev * 100, 1) if rev is not None else None,
-            "mcap": round(mcap / 1e12, 1) if mcap is not None else None,
-        }
-        cache_set(key, row)
-        out.append(row)
-
-    logger.info(f"[snapshot] fundamental: {len(out)} emiten")
-    return out
-
-
-# ── Ulasan laporan keuangan triwulanan ────────────────────────────────────────
 
 _EARNINGS_SYSTEM = """\
 Kamu analis fundamental saham Indonesia. Kamu menerima angka laporan
@@ -327,19 +331,55 @@ def _pct_change(now: Any, before: Any) -> Optional[float]:
     return (now - before) / abs(before) * 100
 
 
-def build_earnings(tickers: list[str]) -> list[dict[str, Any]]:
-    """
-    Ulasan naratif laporan triwulanan per emiten.
+def _parse_json(raw: str) -> dict[str, Any]:
+    """Ambil objek JSON dari balasan LLM; {} kalau gagal."""
+    clean = raw.strip()
+    if clean.startswith("```"):
+        parts = clean.splitlines()
+        clean = "\n".join(parts[1:-1]).strip() if len(parts) > 2 else clean
+    a, b = clean.find("{"), clean.rfind("}")
+    if a == -1 or b <= a:
+        return {}
+    try:
+        val = json.loads(clean[a : b + 1])
+        return val if isinstance(val, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
-    Di-cache dengan kunci berisi TANGGAL LAPORAN, bukan waktu. Jadi ulasan
-    hanya ditulis ulang ketika emiten benar-benar merilis laporan baru —
-    sekali per triwulan, bukan tiap 30 menit.
 
-    Kesegaran data berbeda-beda antar emiten: sebagian sudah Q2, sebagian
-    baru Q1. Periodenya karena itu selalu ikut ditampilkan.
+def build_fundamental_scan(
+    tickers: list[str], max_new_reviews: int = MAX_NEW_REVIEWS
+) -> list[dict[str, Any]]:
     """
+    Scan fundamental SELURUH watchlist: rasio + skor + ulasan naratif,
+    diurutkan dari skor tertinggi.
+
+    Satu objek Ticker dipakai ulang untuk info dan laporan triwulanan —
+    dua panggilan terpisah akan menggandakan waktu scan tanpa guna.
+
+    Dua lapis cache dengan umur berbeda karena datanya berubah pada
+    ritme berbeda:
+      - rasio valuasi ikut harga  -> 24 jam
+      - ulasan naratif ikut LAPORAN -> kunci berisi tanggal laporan,
+        jadi hanya ditulis ulang saat emiten benar-benar merilis yang baru
+
+    Ulasan ditulis SEBANYAK MUNGKIN sampai kuota LLM habis, lalu berhenti
+    di situ; sisanya dikerjakan run-run berikutnya. Menulis 58 sekaligus
+    menembus kuota Groq, dan yang mahal bukan penolakannya melainkan
+    retry bawaan yang menunggu 3x30 detik lalu jatuh ke Gemini. Karena
+    itu retry dimatikan (_retries=1) dan begitu satu panggilan kena
+    limit, seluruh penulisan ulasan dihentikan untuk run ini.
+
+    Papan dibangun tiap 30 menit, jadi seluruh watchlist tercakup dalam
+    beberapa jam tanpa satu run pun membengkak. `max_new_reviews` hanya
+    pagar waktu tambahan, bukan penghenti utama.
+
+    Emiten yang ulasannya belum ada TETAP muncul lengkap dengan rasio dan
+    skornya — hanya narasinya yang menyusul.
+    """
+    budget = max_new_reviews
+    rate_limited = False
     import yfinance as yf
-    import pandas as pd
     from utils.agent_cache import get as cache_get, set as cache_set
     from agents.base_agent import BaseAgent
 
@@ -364,103 +404,144 @@ def build_earnings(tickers: list[str]) -> list[dict[str, Any]]:
     for code in tickers:
         try:
             tk = yf.Ticker(f"{code}.JK")
+
+            # ── Rasio valuasi ────────────────────────────────────────
+            rkey = f"ratio:{code}"
+            row = cache_get(rkey, ttl=24 * 3600)
+            if not row:
+                info = tk.info or {}
+                der  = _sane(info.get("debtToEquity"), 0, 1000)
+                roe  = _sane(info.get("returnOnEquity"), -5, 5)
+                npm  = _sane(info.get("profitMargins"), -5, 5)
+                rev  = _sane(info.get("revenueGrowth"), -5, 20)
+                mcap = _sane(info.get("marketCap"), 1e9, 1e16)
+                per  = _sane(info.get("trailingPE"), 0, 500)
+                pbv  = _sane(info.get("priceToBook"), 0, 100)
+                divy = _sane(info.get("dividendYield"), 0, 100)
+                row = {
+                    "ticker": code,
+                    "sector": info.get("sector") or "",
+                    "name":   info.get("longName") or code,
+                    "per":  round(per, 1) if per is not None else None,
+                    "pbv":  round(pbv, 2) if pbv is not None else None,
+                    "roe":  round(roe * 100, 1) if roe is not None else None,
+                    "der":  round(der / 100, 2) if der is not None else None,   # % -> x
+                    "divy": round(divy, 1) if divy is not None else None,
+                    "npm":  round(npm * 100, 1) if npm is not None else None,
+                    "rev":  round(rev * 100, 1) if rev is not None else None,
+                    "mcap": round(mcap / 1e12, 1) if mcap is not None else None,
+                }
+                cache_set(rkey, row)
+            row = dict(row)
+
+            # ── Ulasan laporan triwulanan ────────────────────────────
             qf = tk.quarterly_financials
-            if qf is None or qf.empty:
-                continue
-            qb = tk.quarterly_balance_sheet
+            if qf is not None and not qf.empty:
+                cols = list(qf.columns)
+                last = cols[0]
+                prev = cols[1] if len(cols) > 1 else None
+                yoy = next((c for c in cols
+                            if c.month == last.month and c.year == last.year - 1), None)
+                period = f"Q{(last.month - 1) // 3 + 1} {last.year}"
+                ekey = f"earnings2:{code}:{last.strftime('%Y%m%d')}"
 
-            cols = list(qf.columns)
-            last = cols[0]
-            prev = cols[1] if len(cols) > 1 else None
-            # Triwulan yang sama tahun lalu, kalau ada di data
-            yoy = next(
-                (c for c in cols
-                 if c.month == last.month and c.year == last.year - 1),
-                None,
-            )
-            period = f"Q{(last.month - 1) // 3 + 1} {last.year}"
-            key = f"earnings2:{code}:{last.strftime('%Y%m%d')}"
+                cached = cache_get(ekey, ttl=120 * 24 * 3600)
+                if cached and (cached.get("revenue") or cached.get("net_income")):
+                    row.update(cached)
+                elif not cached and budget > 0 and not rate_limited:
+                    qb = tk.quarterly_balance_sheet
+                    rev_f = lambda c: pick(qf, ["Total Revenue", "Operating Revenue"], c)
+                    net_f = lambda c: pick(qf, ["Net Income", "Net Income Common Stockholders"], c)
+                    rev_now, net_now = rev_f(last), net_f(last)
 
-            cached = cache_get(key, ttl=120 * 24 * 3600)
-            if cached:
-                # Baris kosong bisa terlanjur tersimpan sebelum penyaring
-                # ada; validasi ulang di sini, bukan hanya saat fetch baru.
-                if cached.get("revenue") or cached.get("net_income"):
-                    out.append(cached)
-                continue
+                    # Emiten yang baru IPO belum punya angka apa pun.
+                    if rev_now or net_now:
+                        opi_now = pick(qf, ["Operating Income"], last)
+                        npm_q = (net_now / rev_now * 100) if rev_now and net_now else None
 
-            rev = lambda c: pick(qf, ["Total Revenue", "Operating Revenue"], c)
-            net = lambda c: pick(qf, ["Net Income", "Net Income Common Stockholders"], c)
-            opi = lambda c: pick(qf, ["Operating Income"], c)
+                        facts = [
+                            f"Emiten        : {code}",
+                            f"Periode       : {period} (per {last.strftime('%d %b %Y')})",
+                            f"Pendapatan    : {_fmt_t(rev_now)}",
+                            f"Laba operasi  : {_fmt_t(opi_now)}",
+                            f"Laba bersih   : {_fmt_t(net_now)}",
+                            (f"Marjin bersih : {npm_q:.1f}%" if npm_q is not None
+                             else "Marjin bersih : -"),
+                        ]
+                        if prev is not None:
+                            d = _pct_change(rev_now, rev_f(prev))
+                            if d is not None:
+                                facts.append(f"vs triwulan sebelumnya: pendapatan {d:+.1f}%")
+                            d = _pct_change(net_now, net_f(prev))
+                            if d is not None:
+                                facts.append(f"  laba bersih {d:+.1f}%")
+                        if yoy is not None:
+                            d = _pct_change(rev_now, rev_f(yoy))
+                            if d is not None:
+                                facts.append(f"vs triwulan sama tahun lalu: pendapatan {d:+.1f}%")
+                            d = _pct_change(net_now, net_f(yoy))
+                            if d is not None:
+                                facts.append(f"  laba bersih {d:+.1f}%")
+                        if qb is not None and not qb.empty and last in qb.columns:
+                            facts += [
+                                f"Total aset    : {_fmt_t(pick(qb, ['Total Assets'], last))}",
+                                f"Total utang   : {_fmt_t(pick(qb, ['Total Debt'], last))}",
+                                f"Ekuitas       : {_fmt_t(pick(qb, ['Stockholders Equity'], last))}",
+                                f"Kas           : {_fmt_t(pick(qb, ['Cash And Cash Equivalents'], last))}",
+                            ]
 
-            rev_now, net_now, opi_now = rev(last), net(last), opi(last)
+                        # Retry dimatikan: yang mahal bukan penolakannya,
+                        # melainkan 3x30 detik menunggu lalu jatuh ke
+                        # Gemini yang kuncinya mati.
+                        raw_text = reader.call_claude(
+                            _EARNINGS_SYSTEM, "\n".join(facts), _retries=1
+                        )
+                        low = raw_text.lower()
+                        if '"error"' in low and (
+                            "rate limit" in low or "rate_limit" in low or "429" in low
+                        ):
+                            rate_limited = True
+                            logger.info(
+                                f"[snapshot] kuota LLM habis di {code} — "
+                                "sisa ulasan menyusul pada run berikutnya"
+                            )
+                            raw = {}
+                        else:
+                            raw = _parse_json(raw_text)
+                        er = {
+                            "period": period,
+                            "as_of": last.strftime("%d %b %Y"),
+                            "stale_days": (datetime.now()
+                                           - last.to_pydatetime().replace(tzinfo=None)).days,
+                            "verdict": str(raw.get("verdict", "")).strip(),
+                            "narrative": str(raw.get("narrative", "")).strip(),
+                            "highlights": [str(h) for h in (raw.get("highlights") or [])][:3],
+                            "revenue": round(rev_now / 1e12, 2) if rev_now else None,
+                            "net_income": round(net_now / 1e12, 2) if net_now else None,
+                        }
+                        if er["narrative"]:
+                            cache_set(ekey, er)
+                            budget -= 1
+                        row.update(er)
 
-            # Emiten yang baru IPO belum punya angka apa pun di Yahoo.
-            # Kartu berisi nol semua bukan ulasan, cuma kebisingan.
-            if not rev_now and not net_now:
-                logger.debug(f"[snapshot] earnings {code}: laporan kosong, dilewati")
-                continue
-
-            npm = (net_now / rev_now * 100) if rev_now and net_now else None
-
-            facts = [
-                f"Emiten        : {code}",
-                f"Periode       : {period} (per {last.strftime('%d %b %Y')})",
-                f"Pendapatan    : {_fmt_t(rev_now)}",
-                f"Laba operasi  : {_fmt_t(opi_now)}",
-                f"Laba bersih   : {_fmt_t(net_now)}",
-                f"Marjin bersih : {npm:.1f}%" if npm is not None else "Marjin bersih : -",
-            ]
-            if prev is not None:
-                d_rev = _pct_change(rev_now, rev(prev))
-                d_net = _pct_change(net_now, net(prev))
-                facts.append(
-                    f"vs triwulan sebelumnya ({prev.strftime('%b %Y')}): "
-                    f"pendapatan {d_rev:+.1f}%" if d_rev is not None else
-                    f"vs triwulan sebelumnya ({prev.strftime('%b %Y')}): pendapatan -")
-                if d_net is not None:
-                    facts.append(f"  laba bersih {d_net:+.1f}%")
-            if yoy is not None:
-                d_rev_y = _pct_change(rev_now, rev(yoy))
-                d_net_y = _pct_change(net_now, net(yoy))
-                if d_rev_y is not None:
-                    facts.append(f"vs triwulan sama tahun lalu: pendapatan {d_rev_y:+.1f}%")
-                if d_net_y is not None:
-                    facts.append(f"  laba bersih {d_net_y:+.1f}%")
-
-            if qb is not None and not qb.empty and last in qb.columns:
-                facts += [
-                    f"Total aset    : {_fmt_t(pick(qb, ['Total Assets'], last))}",
-                    f"Total utang   : {_fmt_t(pick(qb, ['Total Debt'], last))}",
-                    f"Ekuitas       : {_fmt_t(pick(qb, ['Stockholders Equity'], last))}",
-                    f"Kas           : {_fmt_t(pick(qb, ['Cash And Cash Equivalents'], last))}",
-                ]
-
-            raw = reader.call_claude_json(
-                _EARNINGS_SYSTEM, "\n".join(facts),
-                fallback={"verdict": "", "narrative": "", "highlights": []},
-            )
-
-            row = {
-                "ticker": code,
-                "period": period,
-                "as_of": last.strftime("%d %b %Y"),
-                "stale_days": (datetime.now() - last.to_pydatetime().replace(tzinfo=None)).days,
-                "verdict": str(raw.get("verdict", "")).strip(),
-                "narrative": str(raw.get("narrative", "")).strip(),
-                "highlights": [str(h) for h in (raw.get("highlights") or [])][:3],
-                "revenue": round(rev_now / 1e12, 2) if rev_now else None,
-                "net_income": round(net_now / 1e12, 2) if net_now else None,
-                "npm": round(npm, 1) if npm is not None else None,
-            }
-            if row["narrative"]:
-                cache_set(key, row)
-            out.append(row)
+            row.update(score_fundamental(row))
+            if row.get("score") is not None:
+                out.append(row)
 
         except Exception as exc:
-            logger.debug(f"[snapshot] earnings {code}: {exc}")
+            logger.debug(f"[snapshot] fundamental {code}: {exc}")
 
-    logger.info(f"[snapshot] ulasan laporan: {len(out)} emiten")
+    out.sort(key=lambda r: (-(r.get("score") or 0), r["ticker"]))
+    for i, r in enumerate(out, 1):
+        r["rank"] = i
+
+    with_review = sum(1 for r in out if r.get("narrative"))
+    logger.info(
+        f"[snapshot] scan fundamental: {len(out)}/{len(tickers)} emiten, "
+        f"{with_review} punya ulasan, {len(out) - with_review} menyusul "
+        f"({max_new_reviews - budget} ditulis run ini"
+        + (", berhenti karena kuota LLM)" if rate_limited else ")")
+    )
     return out
 
 
@@ -699,9 +780,10 @@ def build(include_journal: bool = False) -> dict[str, Any]:
     news  = build_news()
     runs  = build_runs()
     markets = build_markets()
-    codes = [s["ticker"] for s in signals]
-    fundamentals = build_fundamentals(codes)
-    earnings = build_earnings(codes)
+    # Scan fundamental menyeluruh: SELURUH watchlist, bukan hanya yang
+    # memunculkan sinyal hari ini — tab Fundamental menampilkan peringkat
+    # penuh, dan slip mengambil barisnya dari daftar yang sama.
+    fundamentals = build_fundamental_scan([t.replace(".JK", "") for t in DEFAULT_TICKERS])
     journal = attach_journal(signals) if include_journal else {}
 
     sources = [
@@ -731,7 +813,6 @@ def build(include_journal: bool = False) -> dict[str, Any]:
         "sources": sources,
         "markets": markets,
         "fundamentals": fundamentals,
-        "earnings": earnings,
         "journal": journal,
     }
 
