@@ -499,7 +499,7 @@ footer .num { color: var(--ink-2); }
       <div class="card">
         <div class="idx-head">
           <div>
-            <div class="label">IHSG</div>
+            <div class="label" id="idxLabel">IHSG</div>
             <div class="v num" id="idxLast">—</div>
             <div class="delta num" id="idxDelta">—</div>
           </div>
@@ -743,6 +743,10 @@ function tape(rows) {
 function index(ix) {
   if (!ix || !ix.closes || !ix.closes.length) return;
 
+  /* Tanggal bar selalu tampil. Papan pernah menunjukkan penutupan 2 Sep
+     di sebelah harga saham 3 Sep karena feed indeks Yahoo tertinggal satu
+     sesi, dan tanpa tanggal hal itu mustahil terlihat. */
+  el("idxLabel").textContent = "IHSG" + (ix.as_of ? " · " + ix.as_of : "");
   el("idxLast").textContent = nf2(ix.last);
   const up = ix.change >= 0;
   const dl = el("idxDelta");

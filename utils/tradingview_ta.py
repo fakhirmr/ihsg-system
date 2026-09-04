@@ -87,6 +87,43 @@ def get_tv_ta(ticker_jk: str) -> Optional[dict]:
     return res.get(ticker_jk)
 
 
+def get_index_quote(symbol: str = "IDX:COMPOSITE") -> Optional[dict]:
+    """
+    Level IHSG terkini dari TradingView.
+
+    Perlu karena feed ^JKSE di Yahoo kerap tertinggal satu sesi sementara
+    saham penyusunnya sudah ter-update — papan lalu menampilkan indeks
+    kemarin di samping harga hari ini. Terjadi pada 4 Sep 2026: Yahoo
+    berhenti di 2 Sep (6.595,78) padahal IHSG tutup 3 Sep di 6.667,89.
+
+    Mengembalikan {close, change_pct, change_abs, mode} atau None.
+    """
+    try:
+        resp = requests.post(
+            _TV_SCAN_URL,
+            json={"symbols": {"tickers": [symbol]},
+                  "columns": ["close", "change", "change_abs", "update_mode"]},
+            headers=_HEADERS,
+            timeout=15,
+        )
+        rows = resp.json().get("data", [])
+        if not rows:
+            logger.warning(f"[TV-Index] {symbol} tidak mengembalikan data")
+            return None
+        d = rows[0].get("d", [])
+        if len(d) < 3 or d[0] is None:
+            return None
+        return {
+            "close": float(d[0]),
+            "change_pct": float(d[1]) if d[1] is not None else 0.0,
+            "change_abs": float(d[2]) if d[2] is not None else 0.0,
+            "mode": d[3] if len(d) > 3 else "",
+        }
+    except Exception as exc:
+        logger.warning(f"[TV-Index] {symbol} gagal: {type(exc).__name__}: {exc}")
+        return None
+
+
 def tv_label(value: Optional[float]) -> str:
     if value is None:  return "N/A"
     if value >= 1.5:   return "Strong Buy"

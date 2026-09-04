@@ -102,8 +102,33 @@ def build_index() -> dict[str, Any]:
     if len(df) < 2:
         return {}
 
-    td = calculate_technical_data("^JKSE", df)
     closes = df["Close"].dropna()
+    as_of = closes.index[-1]
+    source = "Yahoo"
+
+    # Feed ^JKSE Yahoo kerap tertinggal satu sesi sementara saham
+    # penyusunnya sudah ter-update, sehingga papan menampilkan indeks
+    # kemarin di sebelah harga hari ini. TradingView dipakai sebagai
+    # sumber level terkini; kalau angkanya memang lebih baru, ia
+    # disambungkan ke ujung deret SEBELUM indikator dihitung.
+    from utils.tradingview_ta import get_index_quote
+    live = get_index_quote()
+    if live and abs(live["close"] - float(closes.iloc[-1])) > 0.01:
+        nxt = as_of + pd.Timedelta(days=1)
+        row = df.iloc[[-1]].copy()
+        row.index = [nxt]
+        for col in ("Open", "High", "Low", "Close"):
+            if col in row.columns:
+                row.loc[nxt, col] = live["close"]
+        df = pd.concat([df, row])
+        closes = df["Close"].dropna()
+        as_of, source = nxt, "TradingView"
+        logger.info(
+            f"[snapshot] ^JKSE Yahoo tertinggal — memakai TradingView "
+            f"{live['close']:,.2f} ({live['change_pct']:+.2f}%)"
+        )
+
+    td = calculate_technical_data("^JKSE", df)
     last, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
 
     return {
@@ -115,6 +140,8 @@ def build_index() -> dict[str, Any]:
         "dates": [d.strftime("%d %b") for d in closes.index[-45:]],
         "trend": td.trend,
         "rsi": round(td.rsi_14, 1),
+        "as_of": as_of.strftime("%d %b"),
+        "source": source,
     }
 
 
