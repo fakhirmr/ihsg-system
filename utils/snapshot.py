@@ -281,6 +281,186 @@ def build_fundamentals(tickers: list[str]) -> list[dict[str, Any]]:
     return out
 
 
+# ── Ulasan laporan keuangan triwulanan ────────────────────────────────────────
+
+_EARNINGS_SYSTEM = """\
+Kamu analis fundamental saham Indonesia. Kamu menerima angka laporan
+keuangan triwulanan satu emiten yang SUDAH dihitung. Tugasmu menuliskan
+ulasannya, bukan menghitung ulang.
+
+Kembalikan HANYA JSON valid, tanpa markdown:
+{
+  "verdict": "<Kuat|Sehat|Campuran|Lemah>",
+  "narrative": "<2-3 kalimat bahasa Indonesia>",
+  "highlights": ["<poin singkat 1>", "<poin singkat 2>"]
+}
+
+Aturan:
+- SELURUH jawaban berbahasa Indonesia, termasuk penulisan angkanya:
+  desimal memakai KOMA dan ribuan memakai TITIK (29,6% bukan 29.6%;
+  1.250 bukan 1,250). Seluruh papan memakai format ini.
+- Pakai HANYA angka yang diberikan. Jangan mengarang angka, tanggal,
+  aksi korporasi, atau nama produk yang tidak tercantum.
+- Sebut arah yang penting: pendapatan, laba bersih, marjin, dan posisi
+  utang/kas. Jelaskan artinya, bukan sekadar mengulang angkanya.
+- "verdict": Kuat = tumbuh dan marjin membaik; Sehat = stabil, neraca
+  aman; Campuran = ada yang membaik ada yang memburuk; Lemah = laba
+  turun tajam, rugi, atau utang menekan.
+- Kalau angkanya sedikit atau banyak yang kosong, katakan terus terang
+  di narasi bahwa datanya terbatas. Jangan menutupinya.
+- Jangan memberi ajakan beli atau jual.
+"""
+
+
+def _fmt_t(v: Any) -> str:
+    """Rupiah triliun, atau '-' kalau tidak ada."""
+    if not isinstance(v, (int, float)) or v != v:
+        return "-"
+    return f"{v / 1e12:,.2f} T"
+
+
+def _pct_change(now: Any, before: Any) -> Optional[float]:
+    if not all(isinstance(x, (int, float)) and x == x for x in (now, before)):
+        return None
+    if before == 0:
+        return None
+    return (now - before) / abs(before) * 100
+
+
+def build_earnings(tickers: list[str]) -> list[dict[str, Any]]:
+    """
+    Ulasan naratif laporan triwulanan per emiten.
+
+    Di-cache dengan kunci berisi TANGGAL LAPORAN, bukan waktu. Jadi ulasan
+    hanya ditulis ulang ketika emiten benar-benar merilis laporan baru —
+    sekali per triwulan, bukan tiap 30 menit.
+
+    Kesegaran data berbeda-beda antar emiten: sebagian sudah Q2, sebagian
+    baru Q1. Periodenya karena itu selalu ikut ditampilkan.
+    """
+    import yfinance as yf
+    import pandas as pd
+    from utils.agent_cache import get as cache_get, set as cache_set
+    from agents.base_agent import BaseAgent
+
+    class _Reader(BaseAgent):
+        def analyze(self, *a: Any, **k: Any) -> dict[str, Any]:
+            return {}
+
+    reader = _Reader()
+    reader.max_tokens = 1024
+
+    def pick(frame: Any, names: list[str], col: Any) -> Any:
+        if frame is None or frame.empty:
+            return None
+        for n in names:
+            if n in frame.index:
+                v = frame.loc[n, col]
+                if isinstance(v, (int, float)) and v == v:
+                    return float(v)
+        return None
+
+    out: list[dict[str, Any]] = []
+    for code in tickers:
+        try:
+            tk = yf.Ticker(f"{code}.JK")
+            qf = tk.quarterly_financials
+            if qf is None or qf.empty:
+                continue
+            qb = tk.quarterly_balance_sheet
+
+            cols = list(qf.columns)
+            last = cols[0]
+            prev = cols[1] if len(cols) > 1 else None
+            # Triwulan yang sama tahun lalu, kalau ada di data
+            yoy = next(
+                (c for c in cols
+                 if c.month == last.month and c.year == last.year - 1),
+                None,
+            )
+            period = f"Q{(last.month - 1) // 3 + 1} {last.year}"
+            key = f"earnings2:{code}:{last.strftime('%Y%m%d')}"
+
+            cached = cache_get(key, ttl=120 * 24 * 3600)
+            if cached:
+                out.append(cached)
+                continue
+
+            rev = lambda c: pick(qf, ["Total Revenue", "Operating Revenue"], c)
+            net = lambda c: pick(qf, ["Net Income", "Net Income Common Stockholders"], c)
+            opi = lambda c: pick(qf, ["Operating Income"], c)
+
+            rev_now, net_now, opi_now = rev(last), net(last), opi(last)
+
+            # Emiten yang baru IPO belum punya angka apa pun di Yahoo.
+            # Kartu berisi nol semua bukan ulasan, cuma kebisingan.
+            if not rev_now and not net_now:
+                logger.debug(f"[snapshot] earnings {code}: laporan kosong, dilewati")
+                continue
+
+            npm = (net_now / rev_now * 100) if rev_now and net_now else None
+
+            facts = [
+                f"Emiten        : {code}",
+                f"Periode       : {period} (per {last.strftime('%d %b %Y')})",
+                f"Pendapatan    : {_fmt_t(rev_now)}",
+                f"Laba operasi  : {_fmt_t(opi_now)}",
+                f"Laba bersih   : {_fmt_t(net_now)}",
+                f"Marjin bersih : {npm:.1f}%" if npm is not None else "Marjin bersih : -",
+            ]
+            if prev is not None:
+                d_rev = _pct_change(rev_now, rev(prev))
+                d_net = _pct_change(net_now, net(prev))
+                facts.append(
+                    f"vs triwulan sebelumnya ({prev.strftime('%b %Y')}): "
+                    f"pendapatan {d_rev:+.1f}%" if d_rev is not None else
+                    f"vs triwulan sebelumnya ({prev.strftime('%b %Y')}): pendapatan -")
+                if d_net is not None:
+                    facts.append(f"  laba bersih {d_net:+.1f}%")
+            if yoy is not None:
+                d_rev_y = _pct_change(rev_now, rev(yoy))
+                d_net_y = _pct_change(net_now, net(yoy))
+                if d_rev_y is not None:
+                    facts.append(f"vs triwulan sama tahun lalu: pendapatan {d_rev_y:+.1f}%")
+                if d_net_y is not None:
+                    facts.append(f"  laba bersih {d_net_y:+.1f}%")
+
+            if qb is not None and not qb.empty and last in qb.columns:
+                facts += [
+                    f"Total aset    : {_fmt_t(pick(qb, ['Total Assets'], last))}",
+                    f"Total utang   : {_fmt_t(pick(qb, ['Total Debt'], last))}",
+                    f"Ekuitas       : {_fmt_t(pick(qb, ['Stockholders Equity'], last))}",
+                    f"Kas           : {_fmt_t(pick(qb, ['Cash And Cash Equivalents'], last))}",
+                ]
+
+            raw = reader.call_claude_json(
+                _EARNINGS_SYSTEM, "\n".join(facts),
+                fallback={"verdict": "", "narrative": "", "highlights": []},
+            )
+
+            row = {
+                "ticker": code,
+                "period": period,
+                "as_of": last.strftime("%d %b %Y"),
+                "stale_days": (datetime.now() - last.to_pydatetime().replace(tzinfo=None)).days,
+                "verdict": str(raw.get("verdict", "")).strip(),
+                "narrative": str(raw.get("narrative", "")).strip(),
+                "highlights": [str(h) for h in (raw.get("highlights") or [])][:3],
+                "revenue": round(rev_now / 1e12, 2) if rev_now else None,
+                "net_income": round(net_now / 1e12, 2) if net_now else None,
+                "npm": round(npm, 1) if npm is not None else None,
+            }
+            if row["narrative"]:
+                cache_set(key, row)
+            out.append(row)
+
+        except Exception as exc:
+            logger.debug(f"[snapshot] earnings {code}: {exc}")
+
+    logger.info(f"[snapshot] ulasan laporan: {len(out)} emiten")
+    return out
+
+
 def build_tape() -> list[dict[str, Any]]:
     from utils.data_fetcher import fetch_stock_data
     out = []
@@ -516,7 +696,9 @@ def build(include_journal: bool = False) -> dict[str, Any]:
     news  = build_news()
     runs  = build_runs()
     markets = build_markets()
-    fundamentals = build_fundamentals([s["ticker"] for s in signals])
+    codes = [s["ticker"] for s in signals]
+    fundamentals = build_fundamentals(codes)
+    earnings = build_earnings(codes)
     journal = attach_journal(signals) if include_journal else {}
 
     sources = [
@@ -546,6 +728,7 @@ def build(include_journal: bool = False) -> dict[str, Any]:
         "sources": sources,
         "markets": markets,
         "fundamentals": fundamentals,
+        "earnings": earnings,
         "journal": journal,
     }
 

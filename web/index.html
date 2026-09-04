@@ -390,6 +390,64 @@ input[type="search"]::placeholder { color: var(--ink-3); }
   font-family: var(--mono);
 }
 
+/* ─── Laporan keuangan: narasi + rasio pendukung ────────────────────── */
+.earn {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+}
+.earn-card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column;
+}
+.earn-h {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  padding: 11px 14px 8px;
+}
+.earn-h .tk { font-family: var(--mono); font-size: var(--step-1); font-weight: 600; }
+.earn-h .per {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.earn-h .vd {
+  margin-left: auto; font-size: 11px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 3px;
+  border: 1px solid var(--rule-strong); background: var(--surface-2); color: var(--ink-2);
+}
+.earn-h .vd.kuat  { color: var(--naik); border-color: color-mix(in srgb, var(--naik) 40%, var(--rule)); }
+.earn-h .vd.sehat { color: var(--naik); border-color: color-mix(in srgb, var(--naik) 30%, var(--rule)); }
+.earn-h .vd.lemah { color: var(--turun); border-color: color-mix(in srgb, var(--turun) 40%, var(--rule)); }
+
+.earn-body { padding: 0 14px 11px; display: flex; flex-direction: column; gap: 7px; }
+.earn-body p { margin: 0; font-size: var(--step--1); color: var(--ink-2); line-height: 1.55; }
+.earn-body ul { margin: 0; padding-left: 15px; display: flex; flex-direction: column; gap: 3px; }
+.earn-body li { font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+
+/* Umur laporan selalu terlihat: sebagian emiten masih Q1 sementara
+   yang lain sudah Q2, jadi "terbaru" tidak berarti sama untuk semua. */
+.earn-stale { font-size: 11px; color: var(--ink-3); font-family: var(--mono); }
+.earn-stale.old { color: var(--serious); }
+
+.earn-ratio {
+  margin-top: auto; border-top: 1px solid var(--rule);
+  display: grid; grid-template-columns: repeat(4, 1fr);
+}
+.earn-ratio div {
+  padding: 7px 6px; text-align: center; border-right: 1px solid var(--rule);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.earn-ratio div:last-child { border-right: 0; }
+.earn-ratio .k {
+  font-size: 10px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600;
+}
+.earn-ratio .v {
+  font-family: var(--mono); font-size: var(--step--1); font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.earn-ratio .v.na { color: var(--ink-3); font-weight: 400; }
+.earn-ratio .v.good { color: var(--naik); }
+
 /* ─── Fundamental emiten ────────────────────────────────────────────── */
 .fund { display: flex; flex-direction: column; }
 .fund-row { padding: 9px 14px; border-bottom: 1px solid var(--rule); }
@@ -616,6 +674,12 @@ footer .num { color: var(--ink-2); }
         <div class="tickets" id="tickets"></div>
         <div class="empty" id="empty" hidden>Tidak ada sinyal yang cocok.</div>
 
+        <div class="sect" id="earnSect" hidden>
+          <h2>Laporan keuangan</h2>
+          <span class="count" id="earnMeta">&mdash;</span>
+        </div>
+        <div class="earn" id="earn"></div>
+
         <div class="sect">
           <h2>Uji balik out-of-sample</h2>
           <span class="count" id="btPeriod">—</span>
@@ -666,11 +730,6 @@ footer .num { color: var(--ink-2); }
           <div class="jrnl" id="jrnl"></div>
         </div>
 
-        <div class="card" id="fundCard" hidden>
-          <div class="card-h"><h2>Fundamental emiten</h2><span class="spacer"></span>
-            <span class="label" id="fundMeta">&mdash;</span></div>
-          <div class="fund" id="fund"></div>
-        </div>
       </aside>
     </div>
 
@@ -725,7 +784,8 @@ async function boot() {
 function render(d) {
   header(d); tape(d.tape); index(d.index); tiles(d);
   signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news);
-  markets(d.markets); fundamentals(d.fundamentals); sources(d.sources); journal(d.journal);
+  markets(d.markets); earnings(d.earnings, d.fundamentals);
+  sources(d.sources); journal(d.journal);
 }
 
 /* ── Jurnal mentor ────────────────────────────────────────────────────
@@ -1068,17 +1128,23 @@ function markets(rows) {
   }).join("");
 }
 
-/* ── Fundamental emiten ───────────────────────────────────────────────
-   Menggantikan kartu "Sumber data". Nilai yang tidak masuk akal sudah
-   disaring di sisi Python (yfinance memulangkan PBV di atas 5.000 untuk
-   sebagian emiten .JK) dan muncul di sini sebagai "—", bukan angka. */
-function fundamentals(rows) {
+/* ── Laporan keuangan ─────────────────────────────────────────────────
+   Ulasan naratif triwulanan, ditulis LLM dari angka yang sudah dihitung
+   di sisi Python. Rasio valuasi ikut ditempel di kaki kartu sebagai
+   konteks pendukung, bukan sebagai isi utama.
+
+   Kesegaran laporan berbeda antar emiten — sebagian sudah Q2, sebagian
+   masih Q1 — jadi periode dan umurnya selalu ditulis apa adanya.      */
+function earnings(rows, funds) {
   rows = rows || [];
   if (!rows.length) return;
-  el("fundCard").hidden = false;
-  el("fundMeta").textContent = rows.length + " emiten";
 
-  /* Persen cukup satu desimal; rasio (x) dua — "ROE 21,10%" hanya bising. */
+  const byTicker = {};
+  (funds || []).forEach(f => { byTicker[f.ticker] = f; });
+
+  el("earnSect").hidden = false;
+  el("earnMeta").textContent = rows.length + " emiten";
+
   const num = (v, d) => Number(v).toLocaleString("id-ID",
     {minimumFractionDigits: d, maximumFractionDigits: d});
   const cell = (k, v, suffix, good) =>
@@ -1087,23 +1153,36 @@ function fundamentals(rows) {
     (v == null ? "—" : num(v, suffix === "%" ? 1 : 2) + (suffix || "")) +
     "</span></div>";
 
-  el("fund").innerHTML = rows.map(f =>
-    '<div class="fund-row">' +
-      '<div class="fund-top"><span class="tk">' + esc(f.ticker) + "</span>" +
-      (f.mcap != null ? '<span class="v num" style="font-size:11px;color:var(--ink-3)">' +
-        nf2(f.mcap) + " T</span>" : "") +
-      '<span class="sec">' + esc(f.sector) + "</span></div>" +
-      '<div class="fund-grid">' +
+  el("earn").innerHTML = rows.map(r => {
+    const f = byTicker[r.ticker] || {};
+    const vd = (r.verdict || "").toLowerCase();
+    const old = r.stale_days > 120;
+
+    return '<article class="earn-card">' +
+      '<div class="earn-h">' +
+        '<span class="tk">' + esc(r.ticker) + "</span>" +
+        '<span class="per">' + esc(r.period) + "</span>" +
+        (r.verdict ? '<span class="vd ' + esc(vd) + '">' + esc(r.verdict) + "</span>" : "") +
+      "</div>" +
+      '<div class="earn-body">' +
+        (r.narrative ? "<p>" + esc(r.narrative) + "</p>" : "") +
+        (r.highlights && r.highlights.length
+          ? "<ul>" + r.highlights.map(h => "<li>" + esc(h) + "</li>").join("") + "</ul>"
+          : "") +
+        '<span class="earn-stale' + (old ? " old" : "") + '">' +
+          (old ? "▲ " : "") + "per " + esc(r.as_of) +
+          " · " + r.stale_days + " hari lalu" +
+          (f.sector ? " · " + esc(f.sector) : "") +
+        "</span>" +
+      "</div>" +
+      '<div class="earn-ratio">' +
         cell("PER", f.per, "x") +
         cell("PBV", f.pbv, "x") +
         cell("ROE", f.roe, "%", f.roe != null && f.roe >= 15) +
-        cell("DER", f.der, "x") +
         cell("Div", f.divy, "%", f.divy != null && f.divy >= 5) +
-        cell("NPM", f.npm, "%") +
-        cell("Rev", f.rev, "%", f.rev != null && f.rev > 0) +
-        "<div></div>" +
       "</div>" +
-    "</div>").join("");
+    "</article>";
+  }).join("");
 }
 
 /* ── Rail ─────────────────────────────────────────────────────────────── */
