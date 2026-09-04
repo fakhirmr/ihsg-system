@@ -383,7 +383,10 @@ def build_earnings(tickers: list[str]) -> list[dict[str, Any]]:
 
             cached = cache_get(key, ttl=120 * 24 * 3600)
             if cached:
-                out.append(cached)
+                # Baris kosong bisa terlanjur tersimpan sebelum penyaring
+                # ada; validasi ulang di sini, bukan hanya saat fetch baru.
+                if cached.get("revenue") or cached.get("net_income"):
+                    out.append(cached)
                 continue
 
             rev = lambda c: pick(qf, ["Total Revenue", "Operating Revenue"], c)

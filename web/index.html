@@ -586,8 +586,120 @@ footer .num { color: var(--ink-2); }
   border-color: color-mix(in srgb, var(--warning) 45%, var(--rule));
 }
 .warnbox.stale code { background: var(--surface); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Penataan v2 — tiga wilayah dengan tugas berbeda:
+     tengah = sinyal (fokus utama, tempat mengambil keputusan)
+     kanan  = berita (aliran konteks, berhalaman)
+     bawah  = kesehatan sistem & uji balik (jarang dilihat, tidak mendesak)
+   Fundamental TIDAK lagi jadi blok sendiri: ia melekat pada slip sinyal,
+   karena baru relevan setelah satu saham menarik perhatian.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ─── Jurnal mentor sebagai pita lebar ──────────────────────────────── */
+.jbar { margin: 0 0 22px; }
+.jbar-grid {
+  display: grid; gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+.jbar-grid > div {
+  padding: 11px 14px; border-right: 1px solid var(--rule);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.jbar-grid > div:last-child { border-right: 0; }
+.jbar-grid p { margin: 0; font-size: var(--step--1); color: var(--ink-2); line-height: 1.5; }
+.jbar-grid ul { margin: 0; padding-left: 15px; display: flex; flex-direction: column; gap: 2px; }
+.jbar-grid li { font-size: var(--step--1); color: var(--ink-2); line-height: 1.45; }
+
+/* ─── Fundamental menempel pada slip ────────────────────────────────── */
+.fx { border-top: 1px solid var(--rule); }
+.fx-head {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; background: none; border: 0; cursor: pointer;
+  font-family: var(--sans); font-size: 11px; color: var(--ink-2); text-align: left;
+  white-space: nowrap;
+}
+.fx-head:hover { background: var(--surface-2); }
+.fx-head .lbl {
+  font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.fx-head .vd { font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.fx-head .vd.kuat, .fx-head .vd.sehat { color: var(--naik); }
+.fx-head .vd.lemah { color: var(--turun); }
+.fx-head .per {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  color: var(--ink-3); white-space: nowrap;
+}
+.fx-head .vd { margin-left: auto; }
+.fx-head .caret { color: var(--ink-3); transition: transform .15s; flex: none; }
+.fx-head[aria-expanded="true"] .caret { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .fx-head .caret { transition: none; } }
+
+.fx-body { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+.fx-body[hidden] { display: none; }
+.fx-body p { margin: 0; font-size: 11px; color: var(--ink-2); line-height: 1.55; }
+.fx-body ul { margin: 0; padding-left: 14px; display: flex; flex-direction: column; gap: 2px; }
+.fx-body li { font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+.fx-meta { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.fx-meta.old { color: var(--serious); }
+.fx-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--rule); margin-top: 2px;
+}
+.fx-grid div {
+  padding: 6px 4px; text-align: center; border-right: 1px solid var(--rule);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.fx-grid div:last-child { border-right: 0; }
+.fx-grid .k {
+  font-size: 9px; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600;
+}
+.fx-grid .v {
+  font-family: var(--mono); font-size: 11px; font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.fx-grid .v.na { color: var(--ink-3); font-weight: 400; }
+.fx-grid .v.good { color: var(--naik); }
+
+/* ─── Rail berita berhalaman ────────────────────────────────────────── */
+.rail { position: sticky; top: 78px; }
+.news-nav { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.news-nav button {
+  width: 22px; height: 22px; padding: 0; cursor: pointer;
+  border: 1px solid var(--rule-strong); border-radius: 4px;
+  background: var(--surface); color: var(--ink-2);
+  font-family: var(--sans); font-size: 12px; line-height: 1;
+}
+.news-nav button:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
+.news-nav button:disabled { opacity: .35; cursor: default; }
+.news-nav .pg {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+  font-variant-numeric: tabular-nums; min-width: 30px; text-align: center;
+}
+.news-page { display: none; }
+.news-page.on { display: block; }
+
+/* ─── Strip kesehatan sistem di kaki halaman ────────────────────────── */
+.agents { margin-top: 22px; }
+.agents-grid {
+  display: grid; gap: 0;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.agents-grid > div {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px; border-right: 1px solid var(--rule);
+}
+.agents-grid > div:last-child { border-right: 0; }
+.agents-grid .nm { font-size: var(--step--1); font-weight: 600; }
+.agents-grid .tm {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  color: var(--ink-3); font-variant-numeric: tabular-nums;
+}
+@media (max-width: 980px) { .rail { position: static; } }
 </style>
-</head>
+
 <body>
 
 <header class="top">
@@ -654,6 +766,12 @@ footer .num { color: var(--ink-2); }
 
     <section class="mkt" id="mkt" hidden></section>
 
+    <section class="card jbar" id="jbar" hidden>
+      <div class="card-h"><h2>Jurnal mentor</h2><span class="spacer"></span>
+        <span class="label" id="jbarMeta">&mdash;</span></div>
+      <div class="jbar-grid" id="jbarGrid"></div>
+    </section>
+
     <div class="cols">
       <main>
         <div class="sect">
@@ -673,65 +791,57 @@ footer .num { color: var(--ink-2); }
 
         <div class="tickets" id="tickets"></div>
         <div class="empty" id="empty" hidden>Tidak ada sinyal yang cocok.</div>
-
-        <div class="sect" id="earnSect" hidden>
-          <h2>Laporan keuangan</h2>
-          <span class="count" id="earnMeta">&mdash;</span>
-        </div>
-        <div class="earn" id="earn"></div>
-
-        <div class="sect">
-          <h2>Uji balik out-of-sample</h2>
-          <span class="count" id="btPeriod">—</span>
-        </div>
-
-        <div class="card">
-          <div class="tablewrap">
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Aturan</th>
-                  <th scope="col">N</th>
-                  <th scope="col">Profit</th>
-                  <th scope="col">Ekspektasi / trade</th>
-                  <th scope="col">PF</th>
-                </tr>
-              </thead>
-              <tbody id="btBody"></tbody>
-            </table>
-          </div>
-          <div class="card-b" style="border-top:1px solid var(--rule)">
-            <div class="warnbox">
-              <span class="ic" aria-hidden="true">&#9650;</span>
-              <span><b>Consol Breakout rugi secara struktural.</b> TP1 di +4% lawan SL &minus;5% menuntut
-              profit di atas 55% sekadar untuk impas; yang tercapai 46% &mdash; di bawah entry acak.
-              Ekspektasi positif Buy on Weakness ditopang 3 trade dari 74 sinyal.</span>
-            </div>
-          </div>
-        </div>
       </main>
 
       <aside class="rail">
         <div class="card">
-          <div class="card-h"><h2>Jalannya agent</h2><span class="spacer"></span>
-            <span class="label">Terakhir</span></div>
-          <div class="runs" id="runs"></div>
-        </div>
-
-        <div class="card">
-          <div class="card-h"><h2>Berita pasar</h2><span class="spacer"></span>
-            <span class="label" id="newsSrc">&mdash;</span></div>
+          <div class="card-h"><h2>Berita pasar</h2>
+            <div class="news-nav" id="newsNav" hidden>
+              <button type="button" id="newsPrev" aria-label="Berita sebelumnya">&#8249;</button>
+              <span class="pg" id="newsPg">1/1</span>
+              <button type="button" id="newsNext" aria-label="Berita berikutnya">&#8250;</button>
+            </div>
+          </div>
           <div class="news" id="news"></div>
         </div>
-
-        <div class="card" id="jrnlCard" hidden>
-          <div class="card-h"><h2>Jurnal mentor</h2><span class="spacer"></span>
-            <span class="label" id="jrnlMeta">&mdash;</span></div>
-          <div class="jrnl" id="jrnl"></div>
-        </div>
-
       </aside>
     </div>
+
+    <div class="sect">
+      <h2>Uji balik out-of-sample</h2>
+      <span class="count" id="btPeriod">—</span>
+    </div>
+
+    <div class="card">
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Aturan</th>
+              <th scope="col">N</th>
+              <th scope="col">Profit</th>
+              <th scope="col">Ekspektasi / trade</th>
+              <th scope="col">PF</th>
+            </tr>
+          </thead>
+          <tbody id="btBody"></tbody>
+        </table>
+      </div>
+      <div class="card-b" style="border-top:1px solid var(--rule)">
+        <div class="warnbox">
+          <span class="ic" aria-hidden="true">&#9650;</span>
+          <span><b>Consol Breakout rugi secara struktural.</b> TP1 di +4% lawan SL &minus;5% menuntut
+          profit di atas 55% sekadar untuk impas; yang tercapai 46% &mdash; di bawah entry acak.
+          Ekspektasi positif Buy on Weakness ditopang 3 trade dari 74 sinyal.</span>
+        </div>
+      </div>
+    </div>
+
+    <section class="card agents">
+      <div class="card-h"><h2>Kesehatan sistem</h2><span class="spacer"></span>
+        <span class="label" id="agentsMeta">&mdash;</span></div>
+      <div class="agents-grid" id="agents"></div>
+    </section>
 
     <footer>
       <span>Sinyal adalah alat bantu analisis, bukan rekomendasi beli.</span>
@@ -745,22 +855,26 @@ footer .num { color: var(--ink-2); }
 
 <script>
 /* ═══════════════════════════════════════════════════════════════════════
-   Halaman ini statis. Seluruh isinya datang dari data/dashboard.json yang
+   Halaman statis. Seluruh isinya datang dari data/dashboard.json yang
    dirakit ulang tiap 30 menit oleh `run_job.py --job dashboard` di GitHub
    Actions, memakai aturan sinyal yang sama persis dengan alert Telegram
    (utils/signal_rules.py). Tidak ada server aplikasi yang perlu dijaga.
+
+   Pembagian wilayah: tengah untuk sinyal, kanan untuk berita, kaki untuk
+   kesehatan sistem. Fundamental melekat pada slip sinyal — baru relevan
+   setelah satu saham menarik perhatian, jadi ia tidak berebut ruang.
    ═══════════════════════════════════════════════════════════════════════ */
 
 const DATA_URL = "data/dashboard.json";
+const NEWS_PER_PAGE = 5;
 
-/* ── Format locale id-ID ──────────────────────────────────────────────── */
 const nf  = n => Number(n).toLocaleString("id-ID");
 const nf2 = n => Number(n).toLocaleString("id-ID", {minimumFractionDigits:2, maximumFractionDigits:2});
+const nfd = (n, d) => Number(n).toLocaleString("id-ID", {minimumFractionDigits:d, maximumFractionDigits:d});
 const pct = n => (n >= 0 ? "+" : "−") + nf2(Math.abs(n)) + "%";
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const el  = id => document.getElementById(id);
 
-/* ── Muat ─────────────────────────────────────────────────────────────── */
 async function boot() {
   let d;
   try {
@@ -783,54 +897,21 @@ async function boot() {
 
 function render(d) {
   header(d); tape(d.tape); index(d.index); tiles(d);
-  signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news);
-  markets(d.markets); earnings(d.earnings, d.fundamentals);
-  sources(d.sources); journal(d.journal);
+  journalBar(d.journal);
+  markets(d.markets);
+  signals(d.signals, d.earnings, d.fundamentals);
+  backtest(d.backtest); news(d.news); agents(d.runs, d.sources);
 }
 
-/* ── Jurnal mentor ────────────────────────────────────────────────────
-   Blok ini hanya ada pada papan LOKAL. Snapshot yang terbit ke GitHub
-   Pages dibangun dengan include_journal=False, jadi d.journal kosong dan
-   seluruh bagian ini tidak dirender — jurnal bersifat rahasia grup.   */
-function journal(j) {
-  if (!j || !j.date) return;
-
-  const card = el("jrnlCard");
-  card.hidden = false;
-  el("jrnlMeta").textContent =
-    j.date + (j.age_days ? " · " + j.age_days + " hari lalu" : " · hari ini");
-
-  const sec = (title, body) =>
-    body ? '<div class="jrnl-sec"><span class="label">' + esc(title) + "</span>" + body + "</div>" : "";
-  const para = t => t ? "<p>" + esc(t) + "</p>" : "";
-  const list = a => (a && a.length)
-    ? "<ul>" + a.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "";
-
-  const lv = j.levels || {};
-  const lvLine = [
-    (lv.support || []).length ? "Support " + (lv.support || []).map(nf).join(" / ") : "",
-    (lv.resistance || []).length ? "Resistance " + (lv.resistance || []).map(nf).join(" / ") : ""
-  ].filter(Boolean).join(" · ");
-
-  el("jrnl").innerHTML =
-    sec("IHSG", para(j.ihsg) + (lvLine ? '<p class="num">' + esc(lvLine) + "</p>" : "")) +
-    sec("Alokasi taktis", list(j.stance)) +
-    sec("Kurs", para(j.currency)) +
-    sec("Komoditas", list(j.commodities)) +
-    sec("Dipantau", list(j.watch)) +
-    sec("Cakupan", para(j.matched + " dari sinyal hari ini ada di jurnal · " +
-                        j.ticker_count + " emiten dibahas"));
-}
-
-/* ── Header + peringatan data basi ───────────────────────────────────── */
+/* ── Header ───────────────────────────────────────────────────────────── */
 function header(d) {
   el("stamp").textContent = d.generated_label;
   el("footStamp").textContent = d.generated_label;
   el("footWatch").textContent = nf(d.watchlist_size);
 
-  const mk = el("pillMarket");
-  mk.innerHTML = '<span class="dot ' + (d.market_open ? "good" : "warning") + '"></span>' +
-                 (d.market_open ? "Pasar buka" : "Pasar tutup");
+  el("pillMarket").innerHTML =
+    '<span class="dot ' + (d.market_open ? "good" : "warning") + '"></span>' +
+    (d.market_open ? "Pasar buka" : "Pasar tutup");
 
   const bad = (d.runs || []).filter(r => r.status === "critical").length;
   const ok  = (d.runs || []).filter(r => r.status === "good").length;
@@ -859,7 +940,7 @@ function tape(rows) {
     '<span class="tape-item"><b>' + esc(x.t) + '</b>' +
     '<span class="px">' + nf(x.p) + '</span>' +
     '<span class="' + (x.c >= 0 ? "up" : "down") + '">' + pct(x.c) + '</span></span>').join("");
-  el("tape").innerHTML = one + one;      /* dua salinan: loop mulus */
+  el("tape").innerHTML = one + one;
 }
 
 /* ── Grafik IHSG ──────────────────────────────────────────────────────── */
@@ -879,7 +960,6 @@ function index(ix) {
   const trendMap = {UPTREND:["good","Uptrend"], DOWNTREND:["critical","Downtrend"], NEUTRAL:["warning","Netral"]};
   const tm = trendMap[ix.trend] || ["idle", ix.trend || "—"];
   el("idxTrend").innerHTML = '<span class="dot ' + tm[0] + '"></span>' + esc(tm[1]);
-
   const zone = ix.rsi >= 70 ? " · jenuh beli" : ix.rsi <= 30 ? " · jenuh jual" : "";
   el("idxRsi").textContent = "RSI " + nf2(ix.rsi) + zone;
 
@@ -954,16 +1034,73 @@ function tiles(d) {
     kvRow("Sesi", d.market_open ? "Buka" : "Tutup", !d.market_open);
 }
 
+/* ── Jurnal mentar sebagai pita lebar ─────────────────────────────────
+   Hanya ada di papan LOKAL. Snapshot yang terbit ke GitHub Pages dibangun
+   dengan include_journal=False, jadi d.journal kosong dan pita ini tidak
+   pernah dirender — jurnal bersifat rahasia grup.                      */
+function journalBar(j) {
+  if (!j || !j.date) return;
+  el("jbar").hidden = false;
+  el("jbarMeta").textContent =
+    j.date + (j.age_days ? " · " + j.age_days + " hari lalu" : " · hari ini") +
+    " · " + j.matched + "/" + j.ticker_count + " cocok";
+
+  const sec = (title, body) =>
+    body ? '<div><span class="label">' + esc(title) + "</span>" + body + "</div>" : "";
+  const para = t => t ? "<p>" + esc(t) + "</p>" : "";
+  const list = a => (a && a.length)
+    ? "<ul>" + a.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "";
+
+  const lv = j.levels || {};
+  const lvLine = [
+    (lv.support || []).length ? "Support " + (lv.support || []).map(nf).join(" / ") : "",
+    (lv.resistance || []).length ? "Resistance " + (lv.resistance || []).map(nf).join(" / ") : ""
+  ].filter(Boolean).join(" · ");
+
+  el("jbarGrid").innerHTML =
+    sec("IHSG", para(j.ihsg) + (lvLine ? '<p class="num">' + esc(lvLine) + "</p>" : "")) +
+    sec("Alokasi taktis", list(j.stance)) +
+    sec("Kurs", para(j.currency)) +
+    sec("Komoditas", list(j.commodities)) +
+    sec("Dipantau", list(j.watch));
+}
+
+/* ── Pasar global ─────────────────────────────────────────────────────
+   Hijau selalu berarti "bagus untuk IHSG", bukan "angkanya naik".
+   USD/IDR dan DXY dibalik: rupiah melemah / dolar menguat itu tekanan. */
+function sparkPath(vals, w, h) {
+  const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  const span = (hi - lo) || 1;
+  return vals.map((v, i) =>
+    (i ? "L" : "M") + ((i / (vals.length - 1)) * w).toFixed(1) + "," +
+    (h - ((v - lo) / span) * (h - 2) - 1).toFixed(1)).join("");
+}
+
+function markets(rows) {
+  rows = rows || [];
+  if (!rows.length) return;
+  el("mkt").hidden = false;
+  el("mkt").innerHTML = rows.map(m => {
+    const goodForIhsg = m.invert ? m.change_pct <= 0 : m.change_pct >= 0;
+    const cls = goodForIhsg ? "up" : "down";
+    const bottom = (m.spark && m.spark.length > 1)
+      ? '<div class="spark"><svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">' +
+        '<path d="' + sparkPath(m.spark, 100, 24) + '" fill="none" stroke="var(--' +
+        (goodForIhsg ? "naik" : "turun") + ')" stroke-width="1.5" ' +
+        'vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></svg></div>'
+      : '<div class="noquote">tanpa riwayat</div>';
+    return '<div class="mkt-tile"><span class="nm">' + esc(m.name) + "</span>" +
+      '<span class="val">' + nfd(m.last, m.dec) + "</span>" +
+      '<span class="chg ' + cls + '">' + pct(m.change_pct) + "</span>" + bottom + "</div>";
+  }).join("");
+}
+
 /* ── Slip sinyal ──────────────────────────────────────────────────────── */
 const KIND = {
   RADAR:    {lbl:"Radar · pantau",  dot:"warning"},
   BREAKOUT: {lbl:"Consol Breakout", dot:"good"},
   WEAKNESS: {lbl:"Buy on Weakness", dot:"good"}
 };
-
-/* Level mentor di dalam slip. Zona yang perlu diwaspadai — harga sudah
-   melewati semua target, atau sudah jebol stop — diberi warna kritis
-   plus teksnya sendiri, tidak pernah warna saja. */
 const ZONE_WARN = ["di atas semua target", "di bawah stop"];
 const STANCE_ID = {
   buy: "beli", buyback: "buyback", add: "tambah",
@@ -972,17 +1109,14 @@ const STANCE_ID = {
 
 function mentorHTML(j) {
   if (!j) return "";
-
   const row = (k, v, cls) =>
     '<div class="mentor-row"><span class="k">' + k + '</span>' +
     '<span class="v' + (cls ? " " + cls : "") + '">' + v + "</span></div>";
-
   const entries = (j.entries || [])
     .map(e => e[0] === e[1] ? nf(e[0]) : nf(e[0]) + "–" + nf(e[1])).join("  ·  ");
   const targets = (j.targets || []).map(nf).join(" / ");
   const stopTxt = j.stop != null
     ? nf(j.stop) + (j.stop_type ? " (" + esc(j.stop_type) + ")" : "") : "";
-
   const rr = j.rr != null ? "  ·  R:R " + nf2(j.rr) : "";
   const warn = ZONE_WARN.indexOf(j.zone) !== -1;
 
@@ -993,17 +1127,53 @@ function mentorHTML(j) {
     (entries ? row("Beli", entries) : "") +
     (targets ? row("Target", targets + rr, "tp") : "") +
     (stopTxt ? row("Stop", stopTxt, "sl") : "") +
-    (j.note ? '<div class="mentor-note">' + esc(j.note) + "</div>" : "") +
-    "</div>";
+    (j.note ? '<div class="mentor-note">' + esc(j.note) + "</div>" : "") + "</div>";
 }
 
-function ticketHTML(s) {
+/* Fundamental menempel pada slip: ringkasan satu baris yang selalu
+   terlihat, narasi lengkap dibuka saat diklik. */
+function fundHTML(e, f, idx) {
+  if (!e && !f) return "";
+  const cell = (k, v, suffix, good) =>
+    '<div><span class="k">' + k + '</span><span class="v' +
+    (v == null ? " na" : (good ? " good" : "")) + '">' +
+    (v == null ? "—" : nfd(v, suffix === "%" ? 1 : 2) + (suffix || "")) + "</span></div>";
+
+  f = f || {};
+  const vd = e && e.verdict ? e.verdict : "";
+  const old = e && e.stale_days > 120;
+  const bodyId = "fx" + idx;
+  const body = e
+    ? '<div class="fx-body" id="' + bodyId + '" hidden>' +
+        (e.narrative ? "<p>" + esc(e.narrative) + "</p>" : "") +
+        (e.highlights && e.highlights.length
+          ? "<ul>" + e.highlights.map(h => "<li>" + esc(h) + "</li>").join("") + "</ul>" : "") +
+        '<span class="fx-meta' + (old ? " old" : "") + '">' + (old ? "▲ " : "") +
+          "per " + esc(e.as_of) + " · " + e.stale_days + " hari lalu" +
+          (f.sector ? " · " + esc(f.sector) : "") + "</span>" +
+      "</div>"
+    : "";
+
+  return '<div class="fx">' +
+    '<button type="button" class="fx-head" aria-expanded="false" aria-controls="' + bodyId + '">' +
+      '<span class="caret" aria-hidden="true">›</span>' +
+      '<span class="lbl">Fundamental</span>' +
+      (e ? '<span class="per">' + esc(e.period) + "</span>" : "") +
+      (vd ? '<span class="vd ' + esc(vd.toLowerCase()) + '">' + esc(vd) + "</span>" : "") +
+    "</button>" + body +
+    '<div class="fx-grid">' +
+      cell("PER", f.per, "x") + cell("PBV", f.pbv, "x") +
+      cell("ROE", f.roe, "%", f.roe != null && f.roe >= 15) +
+      cell("Div", f.divy, "%", f.divy != null && f.divy >= 5) +
+    "</div></div>";
+}
+
+function ticketHTML(s, e, f, idx) {
   const meta = KIND[s.kind] || {lbl:s.kind, dot:"idle"};
   const total = (s.risk_pct + s.reward_pct) || 1;
   const thin  = s.rr < 1;
   const e2 = s.entry2 != null
-    ? '<div class="lv"><span class="k">Entry 2</span><span class="n">' + nf(s.entry2) + "</span></div>"
-    : "";
+    ? '<div class="lv"><span class="k">Entry 2</span><span class="n">' + nf(s.entry2) + "</span></div>" : "";
 
   return '<article class="ticket" data-kind="' + esc(s.kind) + '" data-t="' + esc(s.ticker) + '">' +
     '<div class="t-kind"><span class="dot ' + meta.dot + '"></span>' + esc(meta.lbl) +
@@ -1030,12 +1200,30 @@ function ticketHTML(s) {
       '<div class="lv"><span class="k">TP2</span><span class="n tp">' + nf(s.tp2) + "</span></div>" +
       '<div class="lv"><span class="k">SL</span><span class="n sl">' + nf(s.sl) + "</span></div>" +
       '<div class="lv"><span class="k">Volume</span><span class="n">' + nf2(s.vol) + "×</span></div>" +
-    "</div></article>";
+    "</div>" +
+    fundHTML(e, f, idx) +
+  "</article>";
 }
 
-function signals(rows) {
+function signals(rows, earn, funds) {
   rows = rows || [];
-  el("tickets").innerHTML = rows.map(ticketHTML).join("");
+  const eBy = {}, fBy = {};
+  (earn  || []).forEach(x => { eBy[x.ticker] = x; });
+  (funds || []).forEach(x => { fBy[x.ticker] = x; });
+
+  el("tickets").innerHTML = rows
+    .map((s, i) => ticketHTML(s, eBy[s.ticker], fBy[s.ticker], i)).join("");
+
+  /* Buka-tutup narasi fundamental */
+  el("tickets").addEventListener("click", ev => {
+    const btn = ev.target.closest(".fx-head");
+    if (!btn) return;
+    const body = document.getElementById(btn.getAttribute("aria-controls"));
+    if (!body) return;
+    const open = btn.getAttribute("aria-expanded") === "true";
+    btn.setAttribute("aria-expanded", String(!open));
+    body.hidden = open;
+  });
 
   const cards = [].slice.call(document.querySelectorAll(".ticket"));
   const qEl = el("q");
@@ -1084,134 +1272,79 @@ function backtest(bt) {
   }).join("");
 }
 
-/* ── Pasar global ─────────────────────────────────────────────────────
-   Hijau selalu berarti "bagus untuk IHSG", bukan "angkanya naik".
-   USD/IDR dan DXY dibalik: rupiah melemah / dolar menguat itu tekanan,
-   jadi kenaikannya diwarnai merah meski angkanya naik.               */
-function sparkPath(vals, w, h) {
-  const lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-  const span = (hi - lo) || 1;
-  return vals.map((v, i) =>
-    (i ? "L" : "M") + ((i / (vals.length - 1)) * w).toFixed(1) + "," +
-    (h - ((v - lo) / span) * (h - 2) - 1).toFixed(1)).join("");
-}
-
-function markets(rows) {
-  rows = rows || [];
-  if (!rows.length) return;
-  const box = el("mkt");
-  box.hidden = false;
-
-  box.innerHTML = rows.map(m => {
-    const raw = m.change_pct;
-    const goodForIhsg = m.invert ? raw <= 0 : raw >= 0;
-    const cls = goodForIhsg ? "up" : "down";
-    const val = Number(m.last).toLocaleString("id-ID",
-      {minimumFractionDigits: m.dec, maximumFractionDigits: m.dec});
-
-    let bottom;
-    if (m.spark && m.spark.length > 1) {
-      const d = sparkPath(m.spark, 100, 24);
-      bottom = '<div class="spark"><svg viewBox="0 0 100 26" preserveAspectRatio="none" aria-hidden="true">' +
-        '<path d="' + d + '" fill="none" stroke="var(--' + (goodForIhsg ? "naik" : "turun") +
-        ')" stroke-width="1.5" vector-effect="non-scaling-stroke" ' +
-        'stroke-linejoin="round" stroke-linecap="round"/></svg></div>';
-    } else {
-      bottom = '<div class="noquote">tanpa riwayat</div>';
-    }
-
-    return '<div class="mkt-tile">' +
-      '<span class="nm">' + esc(m.name) + "</span>" +
-      '<span class="val">' + val + "</span>" +
-      '<span class="chg ' + cls + '">' + pct(raw) + "</span>" +
-      bottom + "</div>";
-  }).join("");
-}
-
-/* ── Laporan keuangan ─────────────────────────────────────────────────
-   Ulasan naratif triwulanan, ditulis LLM dari angka yang sudah dihitung
-   di sisi Python. Rasio valuasi ikut ditempel di kaki kartu sebagai
-   konteks pendukung, bukan sebagai isi utama.
-
-   Kesegaran laporan berbeda antar emiten — sebagian sudah Q2, sebagian
-   masih Q1 — jadi periode dan umurnya selalu ditulis apa adanya.      */
-function earnings(rows, funds) {
-  rows = rows || [];
-  if (!rows.length) return;
-
-  const byTicker = {};
-  (funds || []).forEach(f => { byTicker[f.ticker] = f; });
-
-  el("earnSect").hidden = false;
-  el("earnMeta").textContent = rows.length + " emiten";
-
-  const num = (v, d) => Number(v).toLocaleString("id-ID",
-    {minimumFractionDigits: d, maximumFractionDigits: d});
-  const cell = (k, v, suffix, good) =>
-    '<div><span class="k">' + k + '</span><span class="v' +
-    (v == null ? " na" : (good ? " good" : "")) + '">' +
-    (v == null ? "—" : num(v, suffix === "%" ? 1 : 2) + (suffix || "")) +
-    "</span></div>";
-
-  el("earn").innerHTML = rows.map(r => {
-    const f = byTicker[r.ticker] || {};
-    const vd = (r.verdict || "").toLowerCase();
-    const old = r.stale_days > 120;
-
-    return '<article class="earn-card">' +
-      '<div class="earn-h">' +
-        '<span class="tk">' + esc(r.ticker) + "</span>" +
-        '<span class="per">' + esc(r.period) + "</span>" +
-        (r.verdict ? '<span class="vd ' + esc(vd) + '">' + esc(r.verdict) + "</span>" : "") +
-      "</div>" +
-      '<div class="earn-body">' +
-        (r.narrative ? "<p>" + esc(r.narrative) + "</p>" : "") +
-        (r.highlights && r.highlights.length
-          ? "<ul>" + r.highlights.map(h => "<li>" + esc(h) + "</li>").join("") + "</ul>"
-          : "") +
-        '<span class="earn-stale' + (old ? " old" : "") + '">' +
-          (old ? "▲ " : "") + "per " + esc(r.as_of) +
-          " · " + r.stale_days + " hari lalu" +
-          (f.sector ? " · " + esc(f.sector) : "") +
-        "</span>" +
-      "</div>" +
-      '<div class="earn-ratio">' +
-        cell("PER", f.per, "x") +
-        cell("PBV", f.pbv, "x") +
-        cell("ROE", f.roe, "%", f.roe != null && f.roe >= 15) +
-        cell("Div", f.divy, "%", f.divy != null && f.divy >= 5) +
-      "</div>" +
-    "</article>";
-  }).join("");
-}
-
-/* ── Rail ─────────────────────────────────────────────────────────────── */
-function runs(rows) {
-  el("runs").innerHTML = (rows || []).map(r =>
-    '<div class="run"><span class="dot ' + esc(r.status) + '"></span>' +
-    '<span class="nm">' + esc(r.name) +
-      ' <span class="tm" style="text-align:left">· ' + esc(r.hint) + "</span></span>" +
-    '<span class="tm">' + esc(r.state || r.last) + "</span></div>").join("");
-}
-
+/* ── Berita, berhalaman ───────────────────────────────────────────────
+   Rail sepenuhnya milik berita. Ketika artikel lebih banyak dari satu
+   halaman, panah di kepala kartu memindahkan grup — geser kiri/kanan
+   juga bekerja di layar sentuh.                                        */
 function news(rows) {
   rows = rows || [];
-  /* Nama penerbit dari Google News bisa panjang ("Pusat Data Kontan",
-     "Koran Jakarta ®"); merangkainya membuat header membungkus dua baris.
-     Jumlah artikel selalu pendek dan sama informatifnya. */
-  el("newsSrc").textContent = rows.length ? rows.length + " artikel" : "—";
-  el("news").innerHTML = rows.map(x =>
-    '<div class="item"><a class="hd" href="' + esc(x.link) + '" target="_blank" rel="noopener">' +
-    esc(x.title) + "</a>" +
-    '<div class="src"><span class="pub">' + esc(x.publisher) + "</span>" +
-    '<span class="ago">' + esc(x.ago) + "</span></div></div>").join("");
+  const box = el("news");
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty">Belum ada berita.</div>';
+    return;
+  }
+
+  const pages = [];
+  for (let i = 0; i < rows.length; i += NEWS_PER_PAGE) {
+    pages.push(rows.slice(i, i + NEWS_PER_PAGE));
+  }
+
+  box.innerHTML = pages.map((p, i) =>
+    '<div class="news-page' + (i ? "" : " on") + '">' + p.map(x =>
+      '<div class="item"><a class="hd" href="' + esc(x.link) + '" target="_blank" rel="noopener">' +
+      esc(x.title) + "</a>" +
+      '<div class="src"><span class="pub">' + esc(x.publisher) + "</span>" +
+      '<span class="ago">' + esc(x.ago) + "</span></div></div>").join("") +
+    "</div>").join("");
+
+  if (pages.length < 2) return;
+
+  const nav = el("newsNav");
+  nav.hidden = false;
+  const prev = el("newsPrev"), next = el("newsNext"), lbl = el("newsPg");
+  const els = [].slice.call(box.querySelectorAll(".news-page"));
+  let page = 0;
+
+  const show = i => {
+    page = Math.max(0, Math.min(pages.length - 1, i));
+    els.forEach((e, k) => e.classList.toggle("on", k === page));
+    lbl.textContent = (page + 1) + "/" + pages.length;
+    prev.disabled = page === 0;
+    next.disabled = page === pages.length - 1;
+  };
+  prev.addEventListener("click", () => show(page - 1));
+  next.addEventListener("click", () => show(page + 1));
+
+  let x0 = null;
+  box.addEventListener("touchstart", e => { x0 = e.changedTouches[0].clientX; }, {passive: true});
+  box.addEventListener("touchend", e => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    if (Math.abs(dx) > 45) show(page + (dx < 0 ? 1 : -1));
+    x0 = null;
+  }, {passive: true});
+
+  show(0);
 }
 
-function sources(rows) {
-  el("sources").innerHTML = (rows || []).map(s =>
-    '<div class="run"><span class="dot ' + esc(s.status) + '"></span>' +
-    '<span class="nm">' + esc(s.name) + "</span>" +
-    '<span class="tm">' + esc(s.note) + "</span></div>").join("");
+/* ── Kesehatan sistem di kaki halaman ─────────────────────────────────
+   Status diambil dari GitHub REST API, bukan dari jadwal statis: sistem
+   ini pernah mati 17 hari sementara tiap run tetap berstatus sukses.  */
+function agents(runs, sources) {
+  runs = runs || [];
+  const bad = runs.filter(r => r.status === "critical").length +
+              (sources || []).filter(s => s.status === "critical").length;
+  el("agentsMeta").textContent = bad ? bad + " perlu perhatian" : "semua normal";
+
+  el("agents").innerHTML =
+    runs.map(r =>
+      '<div><span class="dot ' + esc(r.status) + '"></span>' +
+      '<span class="nm">' + esc(r.name) + "</span>" +
+      '<span class="tm">' + esc(r.state || r.last) + "</span></div>").join("") +
+    (sources || []).map(s =>
+      '<div><span class="dot ' + esc(s.status) + '"></span>' +
+      '<span class="nm">' + esc(s.name) + "</span>" +
+      '<span class="tm">' + esc(s.note) + "</span></div>").join("");
 }
 
 boot();
