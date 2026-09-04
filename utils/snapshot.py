@@ -291,7 +291,58 @@ def build_runs() -> list[dict[str, Any]]:
 
 # ── Perakitan & penulisan ─────────────────────────────────────────────────────
 
-def build() -> dict[str, Any]:
+def attach_journal(signals: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Tempelkan level mentor ke tiap sinyal + kembalikan blok makro jurnal.
+
+    Catatan harga: level mentor ditulis dalam harga pasar apa adanya,
+    sedangkan harga sistem berasal dari yfinance auto_adjust. Keduanya
+    sama kecuali pada jendela semalam setelah tanggal ex-dividen, saat
+    Yahoo sudah menyesuaikan bar terakhir tapi pasar belum berdagang lagi.
+    """
+    from utils.journal import load_latest, evaluate
+
+    j = load_latest()
+    if not j:
+        return {}
+
+    tickers = j.get("tickers", {})
+    hit = 0
+    for s in signals:
+        note = tickers.get(s["ticker"])
+        if not note:
+            continue
+        hit += 1
+        s["journal"] = {
+            "stance": note.get("stance", ""),
+            "entries": note.get("entries", []),
+            "targets": note.get("targets", []),
+            "note": note.get("note", ""),
+            "raw": note.get("raw", ""),
+            **evaluate(note, s["price"]),
+        }
+
+    logger.info(
+        f"[snapshot] jurnal {j.get('date')}: {hit}/{len(signals)} sinyal "
+        f"punya level mentor ({len(tickers)} emiten di jurnal)"
+    )
+    return {
+        "date": j.get("date"),
+        "age_days": j.get("age_days", 0),
+        "ticker_count": len(tickers),
+        "matched": hit,
+        **(j.get("macro") or {}),
+    }
+
+
+def build(include_journal: bool = False) -> dict[str, Any]:
+    """
+    Rakit snapshot.
+
+    include_journal HARUS False untuk snapshot yang diterbitkan ke GitHub
+    Pages: jurnal mentor diminta untuk tidak disebarkan di luar grup,
+    sementara halaman Pages terbuka untuk siapa saja.
+    """
     now = _now()
     logger.info("[snapshot] merakit data papan...")
 
@@ -301,6 +352,7 @@ def build() -> dict[str, Any]:
     macro = build_macro()
     news  = build_news()
     runs  = build_runs()
+    journal = attach_journal(signals) if include_journal else {}
 
     sources = [
         {"name": "Harga · yfinance",     "status": "good" if index else "critical",
@@ -327,18 +379,20 @@ def build() -> dict[str, Any]:
         "runs": runs,
         "backtest": {"period": BACKTEST_PERIOD, "rows": BACKTEST},
         "sources": sources,
+        "journal": journal,
     }
 
 
-def write(path: Path | None = None) -> Path:
+def write(path: Path | None = None, include_journal: bool = False) -> Path:
     target = path or OUT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
-    data = build()
+    data = build(include_journal=include_journal)
     target.write_text(
         json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
     )
     logger.info(
         f"[snapshot] ditulis ke {target} — {data['counts']['total']} sinyal, "
         f"{len(data['news'])} berita, {len(data['tape'])} tape"
+        + (f", jurnal {data['journal'].get('date')}" if data.get("journal") else ", tanpa jurnal")
     )
     return target

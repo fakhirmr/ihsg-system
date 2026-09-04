@@ -52,6 +52,11 @@ def main() -> None:
         "--job", required=True, choices=VALID_JOBS,
         help=f"Job to run: {', '.join(VALID_JOBS)}"
     )
+    parser.add_argument(
+        "--with-journal", action="store_true",
+        help="Sertakan level jurnal mentor (HANYA papan lokal — jurnal "
+             "bersifat rahasia grup dan tidak boleh terbit ke GitHub Pages)",
+    )
     args = parser.parse_args()
 
     import scheduler as _sched
@@ -63,7 +68,10 @@ def main() -> None:
         raise NotImplementedError(f"Fungsi '{fn_name}' belum ada di scheduler.py")
 
     logger.info(f"Menjalankan job: {args.job}")
-    fn()
+    if args.job == "dashboard":
+        fn(include_journal=args.with_journal)
+    else:
+        fn()
     logger.info(f"Job selesai: {args.job}")
 
 

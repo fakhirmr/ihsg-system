@@ -31,3 +31,6 @@ Thumbs.db
 
 # Snapshot papan web — dibangun ulang tiap run, jangan dicommit
 web/data/dashboard.json
+
+# Jurnal mentor — RAHASIA, jangan pernah dicommit
+data/journal/

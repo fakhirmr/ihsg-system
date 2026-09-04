@@ -317,11 +317,56 @@ input[type="search"]::placeholder { color: var(--ink-3); }
 .rr-ratio.thin { color: var(--critical); }
 .rr-ratio.ok { color: var(--naik); }
 
+/* ─── Blok mentor: sumber luar, jadi dibedakan tapi tidak berteriak ── */
+.mentor {
+  margin-top: auto;
+  border-top: 1px dashed var(--rule-strong);
+  background: var(--accent-wash);
+  padding: 9px 12px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.mentor-h {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--accent);
+}
+.mentor-h .zone {
+  margin-left: auto; font-weight: 600; letter-spacing: 0;
+  text-transform: none; color: var(--ink-2);
+}
+.mentor-h .zone.warn { color: var(--critical); }
+.mentor-row {
+  display: flex; gap: 8px; align-items: baseline;
+  font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.mentor-row .k {
+  font-family: var(--sans); font-size: 11px; font-weight: 600;
+  color: var(--ink-3); width: 46px; flex: none;
+}
+.mentor-row .v { color: var(--ink); }
+.mentor-row .v.tp { color: var(--naik); }
+.mentor-row .v.sl { color: var(--turun); }
+.mentor-note {
+  font-size: 11px; color: var(--ink-2); line-height: 1.4;
+  border-top: 1px solid var(--rule); padding-top: 5px; margin-top: 1px;
+}
+.mentor-note em { font-style: normal; color: var(--ink-3); }
+
 .t-levels {
   border-top: 1px solid var(--rule);
   display: grid; grid-template-columns: 1fr 1fr;
   margin-top: auto;              /* dasar slip sejajar meski alasan beda panjang */
 }
+.mentor + .t-levels { margin-top: 0; }   /* mentor sudah mendorong ke bawah */
+
+/* Kartu jurnal di rail */
+.jrnl { display: flex; flex-direction: column; }
+.jrnl-sec { padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+.jrnl-sec:last-child { border-bottom: 0; }
+.jrnl-sec .label { margin-bottom: 4px; display: block; }
+.jrnl-sec p { margin: 0; font-size: var(--step--1); color: var(--ink-2); line-height: 1.5; }
+.jrnl-sec ul { margin: 0; padding-left: 15px; display: flex; flex-direction: column; gap: 3px; }
+.jrnl-sec li { font-size: var(--step--1); color: var(--ink-2); line-height: 1.45; }
 .lv {
   padding: 7px 12px; border-bottom: 1px solid var(--rule);
   display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
@@ -553,6 +598,12 @@ footer .num { color: var(--ink-2); }
           <div class="news" id="news"></div>
         </div>
 
+        <div class="card" id="jrnlCard" hidden>
+          <div class="card-h"><h2>Jurnal mentor</h2><span class="spacer"></span>
+            <span class="label" id="jrnlMeta">&mdash;</span></div>
+          <div class="jrnl" id="jrnl"></div>
+        </div>
+
         <div class="card">
           <div class="card-h"><h2>Sumber data</h2></div>
           <div class="runs" id="sources"></div>
@@ -610,7 +661,42 @@ async function boot() {
 
 function render(d) {
   header(d); tape(d.tape); index(d.index); tiles(d);
-  signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news); sources(d.sources);
+  signals(d.signals); backtest(d.backtest); runs(d.runs); news(d.news);
+  sources(d.sources); journal(d.journal);
+}
+
+/* ── Jurnal mentor ────────────────────────────────────────────────────
+   Blok ini hanya ada pada papan LOKAL. Snapshot yang terbit ke GitHub
+   Pages dibangun dengan include_journal=False, jadi d.journal kosong dan
+   seluruh bagian ini tidak dirender — jurnal bersifat rahasia grup.   */
+function journal(j) {
+  if (!j || !j.date) return;
+
+  const card = el("jrnlCard");
+  card.hidden = false;
+  el("jrnlMeta").textContent =
+    j.date + (j.age_days ? " · " + j.age_days + " hari lalu" : " · hari ini");
+
+  const sec = (title, body) =>
+    body ? '<div class="jrnl-sec"><span class="label">' + esc(title) + "</span>" + body + "</div>" : "";
+  const para = t => t ? "<p>" + esc(t) + "</p>" : "";
+  const list = a => (a && a.length)
+    ? "<ul>" + a.map(x => "<li>" + esc(x) + "</li>").join("") + "</ul>" : "";
+
+  const lv = j.levels || {};
+  const lvLine = [
+    (lv.support || []).length ? "Support " + (lv.support || []).map(nf).join(" / ") : "",
+    (lv.resistance || []).length ? "Resistance " + (lv.resistance || []).map(nf).join(" / ") : ""
+  ].filter(Boolean).join(" · ");
+
+  el("jrnl").innerHTML =
+    sec("IHSG", para(j.ihsg) + (lvLine ? '<p class="num">' + esc(lvLine) + "</p>" : "")) +
+    sec("Alokasi taktis", list(j.stance)) +
+    sec("Kurs", para(j.currency)) +
+    sec("Komoditas", list(j.commodities)) +
+    sec("Dipantau", list(j.watch)) +
+    sec("Cakupan", para(j.matched + " dari sinyal hari ini ada di jurnal · " +
+                        j.ticker_count + " emiten dibahas"));
 }
 
 /* ── Header + peringatan data basi ───────────────────────────────────── */
@@ -748,6 +834,42 @@ const KIND = {
   WEAKNESS: {lbl:"Buy on Weakness", dot:"good"}
 };
 
+/* Level mentor di dalam slip. Zona yang perlu diwaspadai — harga sudah
+   melewati semua target, atau sudah jebol stop — diberi warna kritis
+   plus teksnya sendiri, tidak pernah warna saja. */
+const ZONE_WARN = ["di atas semua target", "di bawah stop"];
+const STANCE_ID = {
+  buy: "beli", buyback: "buyback", add: "tambah",
+  hold: "tahan", watch: "pantau", exit: "keluar"
+};
+
+function mentorHTML(j) {
+  if (!j) return "";
+
+  const row = (k, v, cls) =>
+    '<div class="mentor-row"><span class="k">' + k + '</span>' +
+    '<span class="v' + (cls ? " " + cls : "") + '">' + v + "</span></div>";
+
+  const entries = (j.entries || [])
+    .map(e => e[0] === e[1] ? nf(e[0]) : nf(e[0]) + "–" + nf(e[1])).join("  ·  ");
+  const targets = (j.targets || []).map(nf).join(" / ");
+  const stopTxt = j.stop != null
+    ? nf(j.stop) + (j.stop_type ? " (" + esc(j.stop_type) + ")" : "") : "";
+
+  const rr = j.rr != null ? "  ·  R:R " + nf2(j.rr) : "";
+  const warn = ZONE_WARN.indexOf(j.zone) !== -1;
+
+  return '<div class="mentor">' +
+    '<div class="mentor-h">Mentor · ' + esc(STANCE_ID[j.stance] || j.stance || "—") +
+      '<span class="zone' + (warn ? " warn" : "") + '">' +
+      (warn ? "▲ " : "") + esc(j.zone) + "</span></div>" +
+    (entries ? row("Beli", entries) : "") +
+    (targets ? row("Target", targets + rr, "tp") : "") +
+    (stopTxt ? row("Stop", stopTxt, "sl") : "") +
+    (j.note ? '<div class="mentor-note">' + esc(j.note) + "</div>" : "") +
+    "</div>";
+}
+
 function ticketHTML(s) {
   const meta = KIND[s.kind] || {lbl:s.kind, dot:"idle"};
   const total = (s.risk_pct + s.reward_pct) || 1;
@@ -773,6 +895,7 @@ function ticketHTML(s) {
       '<span class="rr-ratio ' + (thin ? "thin" : "ok") + '">' + (thin ? "▲ " : "") +
         "R:R " + nf2(s.rr) + "</span>" +
       '<span class="reward-n">+' + nf2(s.reward_pct) + "%</span></div></div>" +
+    mentorHTML(s.journal) +
     '<div class="t-levels">' +
       '<div class="lv"><span class="k">Entry</span><span class="n">' + nf(s.entry) + "</span></div>" +
       e2 +

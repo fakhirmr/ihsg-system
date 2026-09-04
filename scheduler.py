@@ -119,6 +119,42 @@ def _hhmm_to_today(hhmm: str) -> datetime:
     return _now().replace(hour=h, minute=m, second=0, microsecond=0)
 
 
+def _mentor_line(ticker: str, price: float, journal: dict | None) -> str:
+    """
+    Baris level mentor untuk disisipkan ke alert Telegram.
+
+    Aman dikirim: channel Telegram bersifat pribadi. Yang tidak boleh
+    adalah snapshot GitHub Pages — itu publik dan dibangun tanpa jurnal.
+    """
+    if not journal:
+        return ""
+    note = (journal.get("tickers") or {}).get(ticker.replace(".JK", ""))
+    if not note:
+        return ""
+
+    from utils.journal import evaluate
+    ev = evaluate(note, price)
+
+    parts = []
+    entries = note.get("entries") or []
+    if entries:
+        zones = "  ".join(
+            f"{lo:,.0f}" if lo == hi else f"{lo:,.0f}-{hi:,.0f}" for lo, hi in entries
+        )
+        parts.append(f"beli {zones}")
+    if note.get("targets"):
+        parts.append("target " + "/".join(f"{t:,.0f}" for t in note["targets"]))
+    if note.get("stop") is not None:
+        parts.append(f"stop {note['stop']:,.0f} {note.get('stop_type','')}".strip())
+
+    warn = "⚠️ " if ev["zone"] in ("di atas semua target", "di bawah stop") else ""
+    rr = f" · R:R {ev['rr']:.2f}" if ev.get("rr") is not None else ""
+    return (
+        f"\n<b>Mentor</b> ({note.get('stance','')}) — {warn}{ev['zone']}{rr}\n"
+        + " · ".join(parts) + "\n"
+    )
+
+
 # ── 1. TECHNICAL + VOLUME — setiap 15 menit ───────────────────────────────────
 
 def run_technical_volume() -> None:
@@ -164,6 +200,12 @@ def run_technical_volume() -> None:
     weakness_alerts = []
     radar_alerts    = []
 
+    # Jurnal mentor dimuat sekali per scan; None kalau belum ada / sudah basi
+    from utils.journal import load_latest
+    journal = load_latest()
+    if journal:
+        logger.info(f"[Technical+Volume] Jurnal mentor {journal['date']} dipakai")
+
     # Fetch TV TA untuk semua ticker sekaligus (1 HTTP call)
     tv_ta_map = get_tv_ta_batch(list(DEFAULT_TICKERS))
     logger.info(f"[Technical+Volume] TV TA fetched untuk {len(tv_ta_map)} ticker")
@@ -189,6 +231,7 @@ def run_technical_volume() -> None:
                 "entry": lv.entry, "entry2": lv.entry2,
                 "tp1": lv.tp1, "tp2": lv.tp2, "sl": lv.sl,
                 "tv_sig": tv_sig,
+                "mentor": _mentor_line(ticker, verdict["price"], journal),
             }
 
             if verdict["kind"] == BREAKOUT:
@@ -234,7 +277,8 @@ def run_technical_volume() -> None:
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
-            f"SL     : {r['sl']:,.0f}\n\n"
+            f"SL     : {r['sl']:,.0f}\n"
+            f"{r['mentor']}\n"
             f"<i>Breakout dari konsolidasi + volume konfirmasi.\n"
             f"Backtest OOS: 46% profit, ekspektasi -0,6%/trade — TP +4% vs SL -5%.</i>"
         )
@@ -255,7 +299,8 @@ def run_technical_volume() -> None:
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
-            f"SL     : {r['sl']:,.0f}\n\n"
+            f"SL     : {r['sl']:,.0f}\n"
+            f"{r['mentor']}\n"
             f"<i>Momentum pembalikan — exit di hari ke-10.\n"
             f"Backtest OOS: 27% profit, ekspektasi +1,7%/trade, ditopang sedikit trade besar.</i>"
         )
@@ -276,7 +321,8 @@ def run_technical_volume() -> None:
             f"Entry  : {r['entry']:,.0f}\n"
             f"{e2_line}"
             f"TP1    : {r['tp1']:,.0f}  |  TP2: {r['tp2']:,.0f}\n"
-            f"SL     : {r['sl']:,.0f}\n\n"
+            f"SL     : {r['sl']:,.0f}\n"
+            f"{r['mentor']}\n"
             f"<i>Pantau — belum memenuhi semua kondisi BUY</i>"
         )
         # Mark dulu sebelum kirim — RADAR adalah sinyal pantau (bukan urgent BUY),
@@ -731,17 +777,23 @@ def run_supervisor_closing() -> None:
 
 # ── 6. PAPAN WEB — snapshot JSON untuk GitHub Pages ───────────────────────────
 
-def run_dashboard() -> None:
+def run_dashboard(include_journal: bool = False) -> None:
     """
     Rakit web/data/dashboard.json. Tidak mengirim Telegram apa pun dan tidak
     memakai penanda dedup — halaman web selalu menampilkan keadaan terkini,
     bukan hanya yang belum pernah dikirim.
+
+    include_journal hanya untuk papan LOKAL. Snapshot yang terbit ke GitHub
+    Pages wajib tanpa jurnal — isinya rahasia grup, halamannya publik.
     """
     from utils.snapshot import write
 
-    logger.info("[Dashboard] Snapshot dimulai...")
+    logger.info(
+        "[Dashboard] Snapshot dimulai..."
+        + (" (dengan jurnal mentor)" if include_journal else "")
+    )
     try:
-        path = write()
+        path = write(include_journal=include_journal)
         logger.info(f"[Dashboard] Selesai — {path}")
     except Exception as e:
         logger.error(f"[Dashboard] Error: {e}")
