@@ -35,17 +35,17 @@ jobs:
         run: pip install -r requirements.txt
 
       # Watchlist tidak disimpan di repo — ia berasal dari jurnal mentor.
-      # Runner mengambilnya dari Actions variable WATCHLIST (hanya terlihat
-      # pemilik repo) dan menuliskannya sebelum job jalan.
+      # Runner mengambilnya dari Actions SECRET WATCHLIST (disamarkan di log,
+      # hanya terlihat pemilik repo) lalu menuliskannya sebelum job jalan.
       - name: Siapkan watchlist
         env:
-          WATCHLIST: ${{ vars.WATCHLIST }}
+          WATCHLIST: ${{ secrets.WATCHLIST }}
         run: |
           python - <<'PY'
           import json, os, pathlib
           raw = os.environ.get("WATCHLIST", "").strip()
           if not raw:
-              raise SystemExit("Variable WATCHLIST kosong — set di Settings > Secrets and variables > Actions > Variables")
+              raise SystemExit("Secret WATCHLIST kosong — set lewat: gh secret set WATCHLIST")
           codes = json.loads(raw)
           rows = [{"code": c, "added": "", "source": "variable", "last_journal": None} for c in codes]
           p = pathlib.Path("data/watchlist.json")
