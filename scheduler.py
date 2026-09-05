@@ -32,7 +32,11 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+# Di bawah Task Scheduler / pythonw TIDAK ADA konsol sama sekali dan
+# sys.stdout bernilai None. Tanpa penjaga ini, baris berikut melempar
+# AttributeError saat impor — proses mati sebelum sempat mencatat
+# apa pun, dan Task Scheduler tetap melaporkan "sukses".
+if sys.stdout is not None and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
@@ -833,7 +837,10 @@ def run_mentor_monitor() -> None:
 
     Kabar ini masuk Telegram pribadi, tidak pernah ke papan publik.
     """
-    if not _is_market_hours():
+    # Penjaga hari WAJIB ada di sini, bukan hanya di cron. Job ini
+    # dijadwalkan Task Scheduler Windows yang menembak tiap hari —
+    # tanpa cek ini, Sabtu dan Minggu ikut jalan memakai harga Jumat.
+    if not _is_weekday() or not _is_market_hours():
         return
 
     from utils.journal import load_latest, check_triggers

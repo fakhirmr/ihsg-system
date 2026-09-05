@@ -21,7 +21,11 @@ import logging
 import sys
 
 # Force UTF-8
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+# Di bawah Task Scheduler / pythonw TIDAK ADA konsol sama sekali dan
+# sys.stdout bernilai None. Tanpa penjaga ini, baris berikut melempar
+# AttributeError saat impor — proses mati sebelum sempat mencatat
+# apa pun, dan Task Scheduler tetap melaporkan "sukses".
+if sys.stdout is not None and sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
