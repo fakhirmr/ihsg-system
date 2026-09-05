@@ -61,6 +61,7 @@ from utils.agent_cache import (
 MARKET_OPEN  = (9, 0)    # 09:00 WIB
 MARKET_CLOSE = (16, 0)   # 16:00 WIB
 TECHNICAL_INTERVAL_MIN  = 15   # menit
+MENTOR_INTERVAL_MIN     = 15   # menit — pemantau level mentor
 SENTIMENT_INTERVAL_MIN  = 60   # menit
 MACRO_TIME              = "08:00"
 FUNDAMENTAL_WEEKDAY     = 0    # Senin (0=Mon ... 6=Sun)
@@ -800,6 +801,118 @@ def run_dashboard(include_journal: bool = False) -> None:
         raise
 
 
+# ── 7. PEMANTAU RENCANA MENTOR ────────────────────────────────────────────────
+
+# Ikon per jenis kejadian. Stop dan target sengaja dibedakan tajam:
+# yang satu kabar buruk yang tidak boleh terlewat, yang satu kesempatan.
+_MENTOR_ICON = {
+    "zona_beli": "🎯",
+    "target":    "✅",
+    "stop":      "🛑",
+}
+_MENTOR_TITLE = {
+    "zona_beli": "MASUK ZONA BELI",
+    "target":    "TARGET TERSENTUH",
+    "stop":      "STOP JEBOL",
+}
+
+# Satu kabar per emiten per jenis kejadian per hari. Harga bisa
+# bolak-balik melintasi level yang sama belasan kali dalam satu sesi.
+TTL_MENTOR_DEDUP = 24 * 3600
+
+
+def run_mentor_monitor() -> None:
+    """
+    Awasi level mentor sepanjang jam pasar dan kabari saat tersentuh.
+
+    Mentor memberi rencana; bagian yang melelahkan adalah menungguinya.
+    Ini yang dikerjakan sistem: memantau seluruh emiten yang dibahas
+    jurnal terbaru, lalu mengirim kabar hanya pada PERLINTASAN level —
+    bukan pada keadaan, supaya saham yang seharian diam di dalam zona
+    beli tidak mengirim kabar yang sama tiap setengah jam.
+
+    Kabar ini masuk Telegram pribadi, tidak pernah ke papan publik.
+    """
+    if not _is_market_hours():
+        return
+
+    from utils.journal import load_latest, check_triggers
+    from utils.data_fetcher import fetch_stock_data
+
+    journal = load_latest()
+    if not journal:
+        logger.info("[Mentor] Tidak ada jurnal terbaru — dilewati")
+        return
+
+    notes = journal.get("tickers") or {}
+    if not notes:
+        return
+
+    ts    = _now().strftime("%H:%M WIB")
+    today = _now().strftime("%Y-%m-%d")
+    logger.info(f"[Mentor] Pantau {len(notes)} emiten dari jurnal {journal['date']} — {ts}")
+
+    alerts: list[dict] = []
+    for code, note in notes.items():
+        # Hanya yang benar-benar punya level untuk dipantau
+        if not (note.get("entries") or note.get("targets") or note.get("stop")):
+            continue
+        try:
+            sd = fetch_stock_data(f"{code}.JK")
+            if not sd.is_valid:
+                continue
+            for ev in check_triggers(note, sd.current_price, sd.prev_close):
+                key = f"mentor:{ev['kind']}:{code}:{today}"
+                if cache_exists(key, ttl=TTL_MENTOR_DEDUP):
+                    continue
+                alerts.append({
+                    "code": code, "price": sd.current_price,
+                    "change": sd.day_change_pct, "note": note,
+                    "dedup_key": key, **ev,
+                })
+        except Exception as exc:
+            logger.debug(f"[Mentor] {code}: {exc}")
+
+    if not alerts:
+        logger.info("[Mentor] Tidak ada level yang tersentuh")
+        return
+
+    # Stop dulu — itu yang paling tidak boleh terlewat
+    urutan = {"stop": 0, "zona_beli": 1, "target": 2}
+    alerts.sort(key=lambda a: urutan.get(a["kind"], 9))
+
+    for a in alerts:
+        note = a["note"]
+        baris = []
+        if note.get("entries"):
+            baris.append("Beli   : " + "  ".join(
+                f"{lo:,.0f}" if lo == hi else f"{lo:,.0f}-{hi:,.0f}"
+                for lo, hi in note["entries"]))
+        if note.get("targets"):
+            baris.append("Target : " + "/".join(f"{t:,.0f}" for t in note["targets"]))
+        if note.get("stop") is not None:
+            baris.append(
+                f"Stop   : {note['stop']:,.0f} {note.get('stop_type', '')}".rstrip())
+
+        msg = (
+            f"{_MENTOR_ICON[a['kind']]} <b>{_MENTOR_TITLE[a['kind']]}</b> — {ts}\n\n"
+            f"<b>{a['code']}</b>  {a['price']:,.0f} ({a['change']:+.1f}%)\n"
+            f"<i>{a['text']}</i>\n\n"
+            + "\n".join(baris) + "\n\n"
+            + (f"<i>{note['note']}</i>\n\n" if note.get("note") else "")
+            + f"<i>Rencana mentor {journal['date']} · sistem hanya menunggui levelnya, "
+              f"bukan menilai.</i>"
+        )
+        if send_alert_chunked(msg):
+            cache_mark(a["dedup_key"])
+
+    n_stop = sum(1 for a in alerts if a["kind"] == "stop")
+    logger.info(
+        f"[Mentor] {len(alerts)} kabar terkirim"
+        + (f" ({n_stop} stop jebol)" if n_stop else "")
+    )
+
+
 # ── Kartu Jadwal ───────────────────────────────────────────────────────────────
 
 def send_schedule_card() -> None:
@@ -843,6 +956,7 @@ def run_scheduler() -> None:
 
     # State tracker
     last_technical  = _now() - timedelta(minutes=TECHNICAL_INTERVAL_MIN)
+    last_mentor     = _now() - timedelta(minutes=MENTOR_INTERVAL_MIN)
     last_sentiment  = _now() - timedelta(minutes=SENTIMENT_INTERVAL_MIN)
     last_macro_date = None
     last_fund_week  = None
@@ -876,6 +990,16 @@ def run_scheduler() -> None:
             ):
                 last_technical = now
                 _run_thread(run_technical_volume, "tech-vol")
+
+            # ── Pemantau rencana mentor (jam market) ─────────────────────────
+            # Hanya bisa jalan di sini, bukan di GitHub Actions: jurnalnya
+            # rahasia dan sengaja tidak pernah ikut ke repo.
+            if (
+                _is_market_hours()
+                and (now - last_mentor).total_seconds() >= MENTOR_INTERVAL_MIN * 60
+            ):
+                last_mentor = now
+                _run_thread(run_mentor_monitor, "mentor")
 
             # ── Fundamental (1x/minggu Senin 07:30) ──────────────────────────
             if (

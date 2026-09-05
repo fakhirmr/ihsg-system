@@ -365,6 +365,66 @@ def load_latest(max_age_days: int = 5) -> Optional[dict[str, Any]]:
 
 # ── Perbandingan dengan harga sekarang ────────────────────────────────────────
 
+def check_triggers(
+    note: dict[str, Any], price: float, prev_close: Optional[float] = None
+) -> list[dict[str, Any]]:
+    """
+    Kejadian yang layak dikabarkan pada rencana mentor untuk satu emiten.
+
+    Mentor memberi level; sistem yang menungguinya sepanjang jam pasar.
+    Tiga hal yang dipantau:
+      - harga MASUK zona beli   -> kesempatan yang disebut mentor terbuka
+      - harga MENYENTUH target  -> saatnya mempertimbangkan realisasi
+      - harga JEBOL stop        -> rencana mentor batal, jangan didiamkan
+
+    `prev_close` dipakai supaya yang dilaporkan adalah PERLINTASAN, bukan
+    keadaan. Tanpa itu, saham yang seharian diam di dalam zona beli akan
+    memicu kabar yang sama tiap kali scan berjalan.
+    """
+    out: list[dict[str, Any]] = []
+    if not isinstance(price, (int, float)) or price <= 0:
+        return out
+
+    def crossed_into(lo: float, hi: float) -> bool:
+        if not (lo <= price <= hi):
+            return False
+        if prev_close is None:
+            return True
+        return not (lo <= prev_close <= hi)
+
+    for lo, hi in note.get("entries") or []:
+        if crossed_into(float(lo), float(hi)):
+            out.append({
+                "kind": "zona_beli",
+                "text": f"masuk zona beli {lo:,.0f}–{hi:,.0f}" if lo != hi
+                        else f"menyentuh harga beli {lo:,.0f}",
+                "level": lo,
+            })
+            break
+
+    for t in sorted(note.get("targets") or []):
+        t = float(t)
+        if price >= t and (prev_close is None or prev_close < t):
+            out.append({
+                "kind": "target",
+                "text": f"menyentuh target {t:,.0f}",
+                "level": t,
+            })
+            break
+
+    stop = note.get("stop")
+    if isinstance(stop, (int, float)):
+        stop = float(stop)
+        if price <= stop and (prev_close is None or prev_close > stop):
+            out.append({
+                "kind": "stop",
+                "text": f"jebol {note.get('stop_type') or 'stop'} {stop:,.0f}",
+                "level": stop,
+            })
+
+    return out
+
+
 def evaluate(note: dict[str, Any], price: float) -> dict[str, Any]:
     """
     Posisi harga sekarang terhadap level mentor.

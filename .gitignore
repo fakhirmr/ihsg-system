@@ -34,3 +34,7 @@ web/data/dashboard.json
 
 # Jurnal mentor — RAHASIA, jangan pernah dicommit
 data/journal/
+
+# Watchlist turunan jurnal mentor — disimpan sebagai GitHub Actions
+# variable (WATCHLIST), bukan di repo publik
+data/watchlist.json

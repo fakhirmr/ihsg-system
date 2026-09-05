@@ -34,6 +34,26 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Watchlist tidak disimpan di repo — ia berasal dari jurnal mentor.
+      # Runner mengambilnya dari Actions variable WATCHLIST (hanya terlihat
+      # pemilik repo) dan menuliskannya sebelum job jalan.
+      - name: Siapkan watchlist
+        env:
+          WATCHLIST: ${{ vars.WATCHLIST }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          raw = os.environ.get("WATCHLIST", "").strip()
+          if not raw:
+              raise SystemExit("Variable WATCHLIST kosong — set di Settings > Secrets and variables > Actions > Variables")
+          codes = json.loads(raw)
+          rows = [{"code": c, "added": "", "source": "variable", "last_journal": None} for c in codes]
+          p = pathlib.Path("data/watchlist.json")
+          p.parent.mkdir(parents=True, exist_ok=True)
+          p.write_text(json.dumps({"updated": "", "tickers": rows}, indent=1), encoding="utf-8")
+          print(f"watchlist: {len(codes)} emiten")
+          PY
+
       - name: Run Fundamental Weekly
         env:
           LLM_PROVIDER:        ${{ secrets.LLM_PROVIDER }}

@@ -11,6 +11,7 @@ Usage:
     python run_job.py --job fundamental_weekly
     python run_job.py --job supervisor
     python run_job.py --job dashboard
+    python run_job.py --job mentor
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ logger = logging.getLogger("JobRunner")
 from utils.logger import attach_file_handler
 attach_file_handler()
 
-VALID_JOBS = ["macro", "technical", "sentiment", "fundamental_weekly", "supervisor", "dashboard"]
+VALID_JOBS = ["macro", "technical", "sentiment", "fundamental_weekly", "supervisor", "dashboard", "mentor"]
 
 _JOB_FN = {
     "macro":              "run_macro",
@@ -43,6 +44,7 @@ _JOB_FN = {
     "fundamental_weekly": "run_fundamental_weekly",
     "supervisor":         "run_supervisor_closing",
     "dashboard":          "run_dashboard",
+    "mentor":             "run_mentor_monitor",
 }
 
 
@@ -66,6 +68,18 @@ def main() -> None:
     fn = getattr(_sched, fn_name, None)
     if fn is None:
         raise NotImplementedError(f"Fungsi '{fn_name}' belum ada di scheduler.py")
+
+    # Berhenti keras kalau watchlist kosong. Jalan terus dengan daftar
+    # kosong berarti setiap job "sukses" tanpa memeriksa apa pun — dan
+    # kegagalan senyap seperti itulah yang pernah mematikan sistem ini
+    # selama 17 hari tanpa ketahuan.
+    from config import DEFAULT_TICKERS
+    if not DEFAULT_TICKERS and args.job != "macro":
+        sys.exit(
+            "Watchlist KOSONG. Di runner, workflow harus menulis "
+            "data/watchlist.json dari variable WATCHLIST sebelum job jalan; "
+            "di lokal, jalankan ingest_journal.py lebih dulu."
+        )
 
     logger.info(f"Menjalankan job: {args.job}")
     if args.job == "dashboard":

@@ -34,50 +34,17 @@ GEMINI_MODEL: str = "gemini-2.5-flash"  # Free tier: 1,500 req/day
 
 MAX_TOKENS: int = 2048
 
-# ─── Default Watchlist (Yahoo Finance format) ──────────────
-DEFAULT_TICKERS: list[str] = [
-    # ── Energi & Migas ─────────────────────────────────────
-    "PGAS.JK", "BIPI.JK", "ENRG.JK", "ELSA.JK",
-    "MEDC.JK", "ADMR.JK", "PTRO.JK", "ADRO.JK",
-
-    # ── Batubara ───────────────────────────────────────────
-    "PTBA.JK", "ITMG.JK", "INDY.JK", "HRUM.JK",
-    "DEWA.JK", "BUMI.JK", "DKFT.JK", "ARKO.JK",
-
-    # ── Nikel, Mineral & Tambang ───────────────────────────
-    "ANTM.JK", "INCO.JK", "NCKL.JK", "MDKA.JK",
-    "AMMN.JK", "MBMA.JK", "BRMS.JK", "ESSA.JK",
-    "TINS.JK", "PGEO.JK",
-
-    # ── Perkebunan & Agribisnis ────────────────────────────
-    "LSIP.JK", "TAPG.JK", "DSNG.JK", "AADI.JK",
-
-    # ── Perbankan ──────────────────────────────────────────
-    "BBCA.JK", "BBNI.JK", "BRIS.JK", "NISP.JK",
-    "BNGA.JK",
-
-    # ── Industri & Otomotif ────────────────────────────────
-    "ASII.JK", "UNTR.JK", "BRPT.JK", "BNBR.JK",
-
-    # ── Konsumer & Retail ──────────────────────────────────
-    "ICBP.JK", "INDF.JK", "UNVR.JK", "AMRT.JK",
-
-    # ── Telekomunikasi & Teknologi ─────────────────────────
-    "ISAT.JK", "EXCL.JK", "INET.JK", "PSKT.JK",
-    "BUKA.JK", "CDIA.JK",
-
-    # ── Media & Hiburan ────────────────────────────────────
-    "SCMA.JK",
-
-    # ── Infrastruktur & Transportasi ──────────────────────
-    "RAJA.JK", "LEAD.JK", "RATU.JK",
-
-    # ── Asuransi & Keuangan lain ───────────────────────────
-    "AHAP.JK", "KEEN.JK",
-
-    # ── Lain-lain ──────────────────────────────────────────
-    "ELIT.JK", "CPRO.JK", "BKSL.JK",
-]
+# ─── Watchlist ─────────────────────────────────────────────
+# Daftar emiten TIDAK disimpan di repo. Ia berasal dari jurnal mentor,
+# jadi diperlakukan sebagai miliknya: hidup di data/watchlist.json
+# (gitignore) pada mesin lokal, dan di GitHub Actions variable WATCHLIST
+# pada runner — workflow menuliskannya ke berkas sebelum job jalan.
+#
+# Tidak ada daftar cadangan yang ditanam di sini dengan sengaja. Cadangan
+# diam-diam berarti sistem bisa berjalan dengan watchlist yang salah tanpa
+# ada yang sadar — persis jenis kegagalan senyap yang sudah pernah
+# melumpuhkan sistem ini selama 17 hari. Lebih baik berhenti dan berteriak.
+DEFAULT_TICKERS_BUILTIN: list[str] = []
 
 # ─── Analysis Settings ─────────────────────────────────────
 ANALYSIS_PERIOD: str = "3mo"          # yfinance history period
@@ -89,6 +56,27 @@ BASE_DIR: Path = Path(__file__).parent
 DATA_DIR: Path = BASE_DIR / "data"
 LOGS_DIR: Path = BASE_DIR / "logs"
 REPORTS_DIR: Path = BASE_DIR / "reports"
+
+
+# Watchlist efektif: berkas dulu, benih sebagai cadangan.
+def _load_watchlist() -> list[str]:
+    """Baca watchlist dari berkas. Kosong bukan kesalahan diam — lihat catatan."""
+    import json
+    path = BASE_DIR / "data" / "watchlist.json"
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8")).get("tickers") or []
+        codes = [r["code"] for r in rows if isinstance(r, dict) and r.get("code")]
+        if codes:
+            return [f"{c}.JK" for c in codes]
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        import warnings
+        warnings.warn(f"watchlist.json ada tapi tidak terbaca: {exc}")
+    return list(DEFAULT_TICKERS_BUILTIN)
+
+
+DEFAULT_TICKERS: list[str] = _load_watchlist()
 
 # Auto-create directories
 for _d in (DATA_DIR, LOGS_DIR, REPORTS_DIR):

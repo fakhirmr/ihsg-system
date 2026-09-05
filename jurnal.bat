@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 REM ============================================================
 REM  Jurnal Mentor -> Papan IHSG  (klik dua kali berkas ini)
 REM
@@ -44,6 +45,20 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+
+REM Watchlist berasal dari jurnal, jadi TIDAK ikut ke repo publik. Ia
+REM dikirim ke GitHub Actions variable WATCHLIST, yang hanya terlihat
+REM oleh pemilik repo. Runner menuliskannya jadi berkas sebelum job jalan.
+"%PY%" -c "import json;d=json.load(open('data/watchlist.json',encoding='utf-8'));print(json.dumps([r['code'] for r in d['tickers']],separators=(',',':')))" > "%TEMP%\wl.json"
+gh variable set WATCHLIST < "%TEMP%\wl.json" >nul 2>&1
+if errorlevel 1 (
+  echo   Gagal memperbarui variable WATCHLIST. Jalankan manual:
+  echo     gh variable set WATCHLIST ^< data/watchlist.json
+) else (
+  for /f %%n in ('"%PY%" -c "import json;print(len(json.load(open('data/watchlist.json',encoding='utf-8'))['tickers']))"') do set "WLN=%%n"
+  echo   Watchlist terkirim ke GitHub: !WLN! emiten
+)
+del "%TEMP%\wl.json" 2>nul
 
 echo.
 echo   [2/2] Membangun papan lokal...

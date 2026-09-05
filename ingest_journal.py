@@ -80,7 +80,32 @@ def main() -> None:
     data = ingest(text, date_str)
     n_tick = len(data["tickers"])
     print(f"\nSelesai. {n_tick} emiten tersimpan untuk {date_str}.")
-    print("Segarkan papan lokal:  python run_job.py --job dashboard --with-journal")
+
+    # Watchlist mengikuti jurnal: emiten baru yang lolos uji kelayakan
+    # langsung masuk. Tidak ada penghapusan otomatis — mentor tidak
+    # menyebut sebuah emiten hari ini bukan berarti emiten itu dibuang.
+    from utils.watchlist import sync_from_journal
+    rep = sync_from_journal(data)
+
+    print(f"\nWatchlist: {rep['total']} emiten")
+    if rep["added"]:
+        print(f"  Ditambahkan {len(rep['added'])}:")
+        for code, why in rep["added"]:
+            print(f"    + {code:6} {why}")
+    else:
+        print("  Tidak ada emiten baru.")
+
+    if rep["rejected"]:
+        print(f"  Dilewati {len(rep['rejected'])}:")
+        for code, why in rep["rejected"]:
+            print(f"    - {code:6} {why}")
+
+    if rep["stale"]:
+        print("  Lama tidak disebut jurnal (tidak dibuang otomatis):")
+        for code, days in rep["stale"][:8]:
+            print(f"    ? {code:6} {days} hari")
+
+    print("\nSegarkan papan lokal:  python run_job.py --job dashboard --with-journal")
 
 
 if __name__ == "__main__":
